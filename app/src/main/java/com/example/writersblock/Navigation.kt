@@ -1,8 +1,6 @@
 package com.example.writersblock
 
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
@@ -28,8 +26,8 @@ fun MainNavigation(
         entryProvider = entryProvider {
             entry<Home> {
                 HomeScreen(
-                    onNavigate = { dest -> backStack.add(dest) },
-                    modifier = Modifier.safeDrawingPadding()
+                    serviceRunning = isServiceRunning,
+                    onNavigate = { dest -> backStack.add(dest) }
                 )
             }
 
@@ -37,8 +35,7 @@ fun MainNavigation(
                 FileBrowserScreen(
                     folderPath = key.folderPath,
                     onNavigate = { dest -> backStack.add(dest) },
-                    onBack = { backStack.removeLastOrNull() },
-                    modifier = Modifier.safeDrawingPadding()
+                    onBack = { backStack.removeLastOrNull() }
                 )
             }
 
@@ -46,8 +43,7 @@ fun MainNavigation(
                 FileEditorScreen(
                     filePath = key.filePath,
                     folderPath = key.folderPath,
-                    onBack = { backStack.removeLastOrNull() },
-                    modifier = Modifier.safeDrawingPadding()
+                    onBack = { backStack.removeLastOrNull() }
                 )
             }
 
@@ -59,8 +55,7 @@ fun MainNavigation(
                     onRequestOverlayPermission = onRequestOverlayPermission,
                     hasNotificationPermission = hasNotificationPermission,
                     onRequestNotificationPermission = onRequestNotificationPermission,
-                    onBack = { backStack.removeLastOrNull() },
-                    modifier = Modifier.safeDrawingPadding()
+                    onBack = { backStack.removeLastOrNull() }
                 )
             }
         }

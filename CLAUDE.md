@@ -27,9 +27,21 @@ JDK 17 toolchain, compileSdk/targetSdk 36, minSdk 24. Dependency versions live i
 There are no instrumented tests (`androidTest` was deleted) and no Robolectric. Only plain-JVM logic is
 tested: `NoteFormat`, `PendingStore`, the `NoteDocument` list-editing helpers, and `CropGeometry`.
 
-**Nothing has been verified on a device.** A green build plus passing tests means "compiles and the pure
-logic holds". It does not mean the overlay, IME, or capture actually work. Report results that way, and
-add to the manual checklist in `PLAN.md` rather than claiming runtime behaviour.
+**Check runtime behaviour on the emulator, not just the build.** A green build plus passing tests only
+means "compiles and the pure logic holds". The SDK is at `C:/Users/kashi/AppData/Local/Android/Sdk` and
+there is one AVD, `Medium_Phone_API_36.1`; the user is happy for it to be used. Drive it with adb
+(`input tap/swipe/text/keyevent`, `exec-out screencap -p`) and look at the screenshots:
+
+```bash
+ANDROID_SDK=C:/Users/kashi/AppData/Local/Android/Sdk
+"$ANDROID_SDK/emulator/emulator.exe" -avd Medium_Phone_API_36.1 -no-snapshot-save   # run in background
+"$ANDROID_SDK/platform-tools/adb.exe" install -r app/build/outputs/apk/debug/app-debug.apk
+"$ANDROID_SDK/platform-tools/adb.exe" shell appops set com.example.writersblock SYSTEM_ALERT_WINDOW allow
+"$ANDROID_SDK/platform-tools/adb.exe" shell pm grant com.example.writersblock android.permission.POST_NOTIFICATIONS
+```
+
+Reinstalling kills the overlay service; wake it again from Settings. Emulator-verified is still not
+physical-device-verified (see the Risks in `PLAN.md`).
 
 ## Architecture
 
@@ -49,19 +61,29 @@ Package `com.example.writersblock`:
     in it are absolute paths until commit, when `materializeBlocks` moves them into the note's assets dir.
   - `AppPreferences`: SharedPreferences. `overlayActiveFilePath` is the mode flag itself: empty means
     scratch mode, a path means the drawer is bound to that note.
+- `ui/Medieval.kt`: the **design kit**, every themed shape drawn with Canvas (no image assets):
+  `CastleBackdrop` (night sky, moon, castle wall: every screen sits on one), `Banner`, `PennantLabel`,
+  `StoneCard`, `RoyalButton` (+ `ButtonKind`), `ScrollPanel` / `ScrollCard` / `Roller` (the parchment
+  scroll), `ScrollHandle` (the floating handle), `ScrollDialog` / `NameDialog` / `ConfirmDialog`,
+  `InkField`, `NoteRow`, `ScreenHeader`. Build new UI from these rather than from raw Material widgets.
 - `ui/NoteDocument.kt`: the **one shared editor**, used by both `FileEditorScreen` (in-app) and
   `OverlayDrawer` (overlay). Also holds the `SnapshotStateList<NoteBlock>` edit helpers.
 - `service/OverlayService`: a foreground service that is also its own `LifecycleOwner`,
   `SavedStateRegistryOwner` and `ViewModelStoreOwner`, so it can host a `ComposeView` in `WindowManager`.
-  It owns the floating handle (a plain View) and the full-screen drawer window (Compose, `ui/OverlayDrawer.kt`).
+  It owns the floating handle and the full-screen drawer window (both Compose: `ScrollHandle`, `ui/OverlayDrawer.kt`).
   It holds the pending blocks and mirrors them to prefs on every edit. Its companion exposes a static
   `instance` and is the only bridge to the rest of the app (`openDrawer`, `capture`, `pushTextToDrawer`,
   `deliverCapture`, …).
 - `service/CaptureActivity`: a transparent activity. It handles MediaProjection consent, grabs a frame,
   shows the crop screen, runs OCR, then calls `OverlayService.deliverCapture`. `CropGeometry` is the
   screen↔bitmap coordinate math, extracted so it can be tested.
-- `theme/`: `Dimens.kt` (`Gap`, `Corner`), named colours, and typography. Icons are hand-drawn Canvas
-  glyphs in `ui/Icons.kt`. There is no icon library and no emoji, on purpose.
+- `theme/`: the castle-at-night palette in `Color.kt` (sky/stone purples, `Ember` orange banners,
+  `Parchment`/`Ink` for the scroll, `Blood` reserved for destructive actions), `Dimens.kt` (`Gap`,
+  `Corner`, `Pen` outline widths), and `Type.kt`: `Medieval` (bundled MedievalSharp, OFL licence in
+  `docs/fonts-OFL.txt`) for titles, labels and buttons, `Book` (system serif) for prose. Icons are
+  hand-drawn Canvas glyphs in `ui/Icons.kt`. There is no icon library and no emoji, on purpose.
+
+Dark screens use stone + lavender text; anything written on (editor, drawer, dialogs) is ink on parchment.
 
 ## Invariants that are easy to break
 
@@ -76,14 +98,17 @@ Package `com.example.writersblock`:
   document must be seeded with one empty block (`seedIfEmpty`), or the first keystroke closes the keyboard.
 - **No `Dialog` / `ModalBottomSheet` inside the overlay.** A service has no window token
   (`BadTokenException`). Drawer sheets are in-window `Box` siblings.
-- **Read the drawer's slide offset only in the layout and draw phases** (`Modifier.offset { }`,
-  `drawBehind`). Reading it during composition recomposes the editor on every animation frame.
+- **Read the drawer's `unroll` / `dragX` animations only in the layout and draw phases**
+  (`Modifier.offset { }`, `drawBehind`, `drawWithContent`; `ScrollPanel` takes `unroll` as a lambda for
+  this reason). Reading them during composition recomposes the editor on every animation frame.
+- **The overlay has no back dispatcher.** Back is caught with `onPreviewKeyEvent` on the drawer's
+  focusable root; keep that root focusable or Back stops closing the drawer.
 - **Overlay commits are explicit and whole-document:** append, replace, or new note. Nothing is
   live-appended to a bound file.
 - **Capture ordering matters.** Register the `MediaProjection.Callback` and the ImageReader listener
   *before* `createVirtualDisplay`. Raise the service's `mediaProjection` foreground type only after
   consent (`onCaptureStarted`). Size the display from `maximumWindowMetrics`, not `displayMetrics`.
-  `CaptureActivity` re-launches itself to come back to the front, so it only asks for consent again
-  when `EXTRA_NEW_CAPTURE` is present.
+  On API 34+ consent is requested with `MediaProjectionConfig.createConfigForDefaultDisplay()`; without it
+  Android defaults to "Share one app", which sends the user through an app picker.
 - **Qualified resource styles replace the unqualified one; they do not merge with it.** Transparency
   items live in `Theme.WritersBlock.Transparent.Base`, which both `values/` and `values-v27/` inherit.

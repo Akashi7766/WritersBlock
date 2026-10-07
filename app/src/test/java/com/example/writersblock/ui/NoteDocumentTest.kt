@@ -212,6 +212,27 @@ class NoteDocumentTest {
     }
 
     @Test
+    fun `capturing into an empty document leaves no blank line above the picture`() {
+        // The seeded empty block showed up as an orphaned "start typing" line above every first scan.
+        val blocks = emptyNoteBlocks()
+
+        blocks.appendImage(alt = "cap", ref = REF)
+
+        assertTrue(blocks[0] is NoteBlock.Image)
+        assertEquals(2, blocks.size)
+    }
+
+    @Test
+    fun `two captures in a row do not leave an empty block between them`() {
+        val blocks = emptyNoteBlocks()
+
+        blocks.appendImage(alt = "one", ref = REF)
+        blocks.appendImage(alt = "two", ref = REF)
+
+        assertEquals(listOf(true, true, false), blocks.map { it is NoteBlock.Image })
+    }
+
+    @Test
     fun `a text block that already ends in a newline is not given a second one`() {
         // A blank line between the prose and the picture would come back as an empty paragraph.
         val blocks = emptyNoteBlocks()

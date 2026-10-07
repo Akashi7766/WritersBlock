@@ -10,6 +10,7 @@ import android.hardware.display.VirtualDisplay
 import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionConfig
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
@@ -20,13 +21,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -37,10 +35,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -53,40 +49,30 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.ClipOp
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.writersblock.data.CaptureStore
-import com.example.writersblock.theme.BorderGray
-import com.example.writersblock.theme.Corner
+import com.example.writersblock.theme.Ember
 import com.example.writersblock.theme.Gap
-import com.example.writersblock.theme.PureWhite
-import com.example.writersblock.theme.SlateRaised
-import com.example.writersblock.theme.TextGray
-import com.example.writersblock.theme.TextMuted
-import com.example.writersblock.theme.TextWhite
+import com.example.writersblock.theme.Gold
+import com.example.writersblock.theme.Lavender
+import com.example.writersblock.theme.NightDeep
+import com.example.writersblock.theme.Stone
 import com.example.writersblock.theme.WritersBlockTheme
+import com.example.writersblock.ui.Banner
+import com.example.writersblock.ui.ButtonKind
+import com.example.writersblock.ui.RoyalButton
+import com.example.writersblock.ui.StoneCard
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.nio.ByteBuffer
-
-/**
- * Set by [OverlayService.startCapture] on the intent that starts a capture, and on no other intent
- * this screen is given.
- *
- * [CaptureActivity.onNewIntent] sees every intent that reaches the activity, including the one it
- * sends itself to come back to the front after consent. Only the one carrying this is a request for a
- * new capture; without the marker, coming to the front would ask for consent again, for ever.
- */
-internal const val EXTRA_NEW_CAPTURE = "com.example.writersblock.extra.NEW_CAPTURE"
 
 /**
  * Screenshots the screen, lets the user crop a region, and keeps the cropped picture, optionally with
@@ -213,8 +199,22 @@ class CaptureActivity : ComponentActivity() {
 
         projectionManager =
             getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        captureLauncher.launch(projectionManager.createScreenCaptureIntent())
+        captureLauncher.launch(consentIntent())
     }
+
+    /**
+     * The consent dialog, locked to the whole screen where the platform allows it.
+     *
+     * From Android 14 the dialog defaults to "Share one app", which sends the user through an app
+     * picker and brings the chosen app to the front, leaving the crop screen behind it. A scan is always
+     * of what is on screen right now, so that choice only ever got in the way.
+     */
+    private fun consentIntent(): Intent =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            projectionManager.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
+        } else {
+            projectionManager.createScreenCaptureIntent()
+        }
 
     // ── Projection ────────────────────────────────────────────────────────────────────────────
 
@@ -372,12 +372,6 @@ class CaptureActivity : ComponentActivity() {
 
     private fun showCropScreen(bitmap: Bitmap) {
         cropShown = true
-        // Android 14's "share a single app" option brings the app the user picked to the front to
-        // confirm it, which leaves this screen — and so the crop — behind it. Coming back here puts
-        // the crop where the user is already looking, instead of leaving them to find their way back
-        // to it. Done now rather than at consent, because until the frame has been taken this screen
-        // has to stay out of the way of whatever is being captured.
-        bringToFront()
         setContent {
             WritersBlockTheme {
                 CropScreen(
@@ -389,21 +383,6 @@ class CaptureActivity : ComponentActivity() {
                 )
             }
         }
-    }
-
-    /**
-     * Puts this screen back in front of whatever the consent dialog left on top of it.
-     *
-     * Sent to itself: `singleTop` reuses this instance, so it comes back as [onNewIntent]. That is why
-     * the request carries no [EXTRA_NEW_CAPTURE] — arriving without it, it cannot ask for consent a
-     * second time. A refusal from the platform is not worth reporting: the crop is still there, one
-     * back gesture away.
-     */
-    private fun bringToFront() {
-        val intent = Intent(this, CaptureActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-        }
-        runCatching { startActivity(intent) }
     }
 
     /**
@@ -488,11 +467,8 @@ class CaptureActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        // Already cropping: a request while the user is choosing a region is not a new capture. The
-        // extra is what separates a real request from this screen's own [bringToFront].
-        if (intent.getBooleanExtra(EXTRA_NEW_CAPTURE, false) && !cropShown) {
-            captureLauncher.launch(projectionManager.createScreenCaptureIntent())
-        }
+        // Already cropping: a request while the user is choosing a region is not a new capture.
+        if (!cropShown) captureLauncher.launch(consentIntent())
     }
 
     override fun onDestroy() {
@@ -584,7 +560,7 @@ fun CropScreen(
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(NightDeep)
     ) {
         // The screenshot is fitted and centred; all the arithmetic between what the finger touches and
         // what gets cropped lives in CropGeometry, where it can be tested without a screen.
@@ -615,12 +591,7 @@ fun CropScreen(
 
         /** The current selection as the rectangle the crop will be cut with, or null if there is none. */
         fun selectedRect(): android.graphics.Rect? = selection?.let {
-            android.graphics.Rect(
-                it.left.toInt(),
-                it.top.toInt(),
-                it.right.toInt(),
-                it.bottom.toInt(),
-            )
+            android.graphics.Rect(it.left.toInt(), it.top.toInt(), it.right.toInt(), it.bottom.toInt())
         }
 
         Canvas(
@@ -643,16 +614,10 @@ fun CropScreen(
         ) {
             drawImage(
                 image = image,
-                srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
-                srcSize = androidx.compose.ui.unit.IntSize(bitmap.width, bitmap.height),
-                dstOffset = androidx.compose.ui.unit.IntOffset(
-                    geometry.originX.toInt(),
-                    geometry.originY.toInt()
-                ),
-                dstSize = androidx.compose.ui.unit.IntSize(
-                    geometry.drawnWidth.toInt(),
-                    geometry.drawnHeight.toInt()
-                ),
+                srcOffset = IntOffset.Zero,
+                srcSize = IntSize(bitmap.width, bitmap.height),
+                dstOffset = IntOffset(geometry.originX.toInt(), geometry.originY.toInt()),
+                dstSize = IntSize(geometry.drawnWidth.toInt(), geometry.drawnHeight.toInt()),
             )
 
             val onScreen = selectionOnScreen
@@ -664,38 +629,27 @@ fun CropScreen(
                     bottom = onScreen.bottom,
                     clipOp = ClipOp.Difference,
                 ) {
-                    drawRect(color = Color(0xA6000000))
+                    drawRect(color = NightDeep.copy(alpha = 0.7f))
                 }
                 drawRect(
-                    color = PureWhite,
+                    color = Ember,
                     topLeft = Offset(onScreen.left, onScreen.top),
                     size = Size(onScreen.width, onScreen.height),
-                    style = Stroke(width = 1.5f * density.density),
+                    style = Stroke(width = 2.5f * density.density),
                 )
-                // Corner ticks, so the selection reads as a crop box rather than as a highlight.
-                val tick = 14f * density.density
-                val corners = listOf(
+                // Gold corner brackets, so the selection reads as a crop box rather than a highlight.
+                val tick = 16f * density.density
+                listOf(
                     Offset(onScreen.left, onScreen.top) to Offset(1f, 1f),
                     Offset(onScreen.right, onScreen.top) to Offset(-1f, 1f),
                     Offset(onScreen.left, onScreen.bottom) to Offset(1f, -1f),
                     Offset(onScreen.right, onScreen.bottom) to Offset(-1f, -1f),
-                )
-                corners.forEach { (corner, direction) ->
-                    drawLine(
-                        color = PureWhite,
-                        start = corner,
-                        end = corner + Offset(tick * direction.x, 0f),
-                        strokeWidth = 3f * density.density,
-                    )
-                    drawLine(
-                        color = PureWhite,
-                        start = corner,
-                        end = corner + Offset(0f, tick * direction.y),
-                        strokeWidth = 3f * density.density,
-                    )
+                ).forEach { (corner, direction) ->
+                    drawLine(Gold, corner, corner + Offset(tick * direction.x, 0f), strokeWidth = 4f * density.density)
+                    drawLine(Gold, corner, corner + Offset(0f, tick * direction.y), strokeWidth = 4f * density.density)
                 }
             } else {
-                drawRect(color = Color(0x59000000))
+                drawRect(color = NightDeep.copy(alpha = 0.35f))
             }
         }
 
@@ -708,50 +662,50 @@ fun CropScreen(
                 .padding(horizontal = Gap.screenH, vertical = Gap.screenV),
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                if (looksBlank) {
-                    NoticeBox(
-                        "THIS SCREEN IS BLACK — apps that block screenshots (banking, some chat " +
-                                "and video apps) return a blank frame, so there is nothing to read."
-                    )
-                    Spacer(Modifier.height(Gap.sm))
-                }
-
-                PromptPill(
-                    when {
-                        working == CropAction.IMAGE_AND_TEXT -> "READING THE TEXT…"
-                        working == CropAction.IMAGE_ONLY -> "KEEPING THE PICTURE…"
-                        selection == null -> "DRAG OVER WHAT YOU WANT TO KEEP"
-                        else -> "${selection.width.toInt()} × ${selection.height.toInt()} PX"
-                    }
+            Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Banner(
+                    text = when {
+                        working == CropAction.IMAGE_AND_TEXT -> "Reading the words…"
+                        working == CropAction.IMAGE_ONLY -> "Keeping the picture…"
+                        selection == null -> "Drag over what to keep"
+                        else -> "${selection.width.toInt()} × ${selection.height.toInt()}"
+                    },
                 )
+                if (looksBlank) {
+                    Spacer(Modifier.height(Gap.sm))
+                    StoneCard(modifier = Modifier.fillMaxWidth(), fill = Stone.copy(alpha = 0.95f)) {
+                        Text(
+                            text = "This screen came back black. Apps that block screenshots (banking, " +
+                                    "some chat and video apps) return a blank frame, so there is nothing to read.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Lavender,
+                        )
+                    }
+                }
             }
 
             Column(modifier = Modifier.fillMaxWidth()) {
-                // OCR takes a moment on a dense screen. Without this the only feedback was a button
-                // that stopped responding, which is indistinguishable from a tap that missed.
+                // OCR takes a moment on a dense screen. Without this, a button that stopped responding was
+                // indistinguishable from a tap that missed.
                 if (busy) {
                     LinearProgressIndicator(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(bottom = Gap.sm),
-                        color = PureWhite,
-                        trackColor = BorderGray,
+                        color = Ember,
+                        trackColor = Stone,
                     )
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(Gap.sm)) {
-                    OutlineAction(
-                        label = "FULL SCREEN",
+                    RoyalButton(
+                        label = "Whole Screen",
                         enabled = !busy,
                         modifier = Modifier.weight(1f),
                         onClick = { selectAll() },
                     )
-                    OutlineAction(
-                        label = "CANCEL",
+                    RoyalButton(
+                        label = "Cancel",
                         enabled = !busy,
                         modifier = Modifier.weight(1f),
                         onClick = onCancelled,
@@ -760,19 +714,20 @@ fun CropScreen(
 
                 Spacer(Modifier.height(Gap.sm))
 
-                // The two ways of keeping the crop, side by side because they are alternatives rather
-                // than a default and its lesser twin. The one that also reads is wider. Only the
-                // button that was pressed changes its wording — the other just goes inert, so the
-                // screen does not say the same thing twice.
+                // Two ways of keeping the crop, side by side because they are alternatives, not a
+                // default and its lesser twin. The one that also reads is wider.
                 Row(horizontalArrangement = Arrangement.spacedBy(Gap.sm)) {
-                    PrimaryAction(
-                        label = if (working == CropAction.IMAGE_AND_TEXT) "READING…" else "KEEP + READ",
+                    RoyalButton(
+                        label = if (working == CropAction.IMAGE_AND_TEXT) "Reading…" else "Keep + Read",
+                        kind = ButtonKind.Primary,
+                        height = 54.dp,
                         enabled = hasSelection && !busy,
                         modifier = Modifier.weight(1.4f),
                         onClick = { selectedRect()?.let { onCropConfirmed(it, CropAction.IMAGE_AND_TEXT) } },
                     )
-                    OutlineAction(
-                        label = if (working == CropAction.IMAGE_ONLY) "KEEPING…" else "IMAGE ONLY",
+                    RoyalButton(
+                        label = if (working == CropAction.IMAGE_ONLY) "Keeping…" else "Picture Only",
+                        height = 54.dp,
                         enabled = hasSelection && !busy,
                         modifier = Modifier.weight(1f),
                         onClick = { selectedRect()?.let { onCropConfirmed(it, CropAction.IMAGE_ONLY) } },
@@ -780,104 +735,5 @@ fun CropScreen(
                 }
             }
         }
-    }
-}
-
-/** The confirm action: filled, so it is the obvious one to press. */
-@Composable
-private fun PrimaryAction(
-    label: String,
-    enabled: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-) {
-    Button(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = modifier.height(52.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = PureWhite,
-            contentColor = Color.Black,
-            disabledContainerColor = SlateRaised,
-            disabledContentColor = TextMuted,
-        ),
-        shape = RoundedCornerShape(Corner.medium),
-    ) {
-        Text(
-            label,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.sp,
-            fontSize = 13.sp,
-        )
-    }
-}
-
-/** The instruction or readout, as a white pill. Legible over any screenshot, dark or light. */
-@Composable
-private fun PromptPill(text: String) {
-    Box(
-        modifier = Modifier
-            .background(PureWhite, RoundedCornerShape(Corner.small))
-            .padding(horizontal = Gap.lg, vertical = Gap.sm)
-    ) {
-        Text(
-            text = text,
-            color = Color.Black,
-            fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.sp,
-        )
-    }
-}
-
-/** A warning. Dark and outlined, so it reads as a caveat rather than as the instruction. */
-@Composable
-private fun NoticeBox(text: String) {
-    Box(
-        modifier = Modifier
-            .background(Color(0xE6121212), RoundedCornerShape(Corner.small))
-            .border(BorderStroke(1.dp, BorderGray), RoundedCornerShape(Corner.small))
-            .padding(horizontal = Gap.lg, vertical = Gap.md)
-    ) {
-        Text(
-            text = text,
-            color = TextGray,
-            fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace,
-            lineHeight = 16.sp,
-        )
-    }
-}
-
-/** A secondary action: outlined, so the primary one is unambiguous. */
-@Composable
-private fun OutlineAction(
-    label: String,
-    enabled: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-) {
-    Button(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = modifier.height(46.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = Color.Transparent,
-            contentColor = TextWhite,
-            disabledContainerColor = Color.Transparent,
-            disabledContentColor = TextMuted,
-        ),
-        border = BorderStroke(1.dp, BorderGray),
-        shape = RoundedCornerShape(Corner.medium),
-    ) {
-        Text(
-            label,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.sp,
-            fontSize = 11.sp,
-        )
     }
 }

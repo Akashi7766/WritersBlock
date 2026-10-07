@@ -33,21 +33,21 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.writersblock.data.NoteBlock
 import com.example.writersblock.data.resolveAsset
-import com.example.writersblock.theme.BorderGray
+import com.example.writersblock.theme.Book
 import com.example.writersblock.theme.Corner
 import com.example.writersblock.theme.Gap
-import com.example.writersblock.theme.PureBlack
-import com.example.writersblock.theme.PureWhite
-import com.example.writersblock.theme.TextMuted
-import com.example.writersblock.theme.TextWhite
+import com.example.writersblock.theme.Ink
+import com.example.writersblock.theme.InkFaded
+import com.example.writersblock.theme.Outline
+import com.example.writersblock.theme.Parchment
+import com.example.writersblock.theme.ParchmentEdge
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -79,8 +79,8 @@ fun NoteDocument(
     onTextChange: (id: String, text: String) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
-    emptyHint: String = "start typing...",
-    textColor: Color = TextWhite,
+    emptyHint: String = "Write here…",
+    textColor: Color = Ink,
     onImageRemove: ((id: String) -> Unit)? = null,
 ) {
     LazyColumn(
@@ -121,18 +121,18 @@ fun stagedImageResolver(): (String) -> File? = { ref -> File(ref) }
 
 /** The document's text styling. Shared so the hint and real text line up exactly. */
 private val EditorTextStyle = TextStyle(
-    color = TextWhite,
-    fontFamily = FontFamily.Monospace,
-    fontSize = 14.sp,
-    lineHeight = 20.sp,
+    color = Ink,
+    fontFamily = Book,
+    fontSize = 17.sp,
+    lineHeight = 26.sp,
 )
 
 @Composable
 private fun Hint(text: String) {
     Text(
         text = text,
-        style = EditorTextStyle.copy(color = Color(0xFF333333)),
-        modifier = Modifier.defaultMinSize(minHeight = 20.dp),
+        style = EditorTextStyle.copy(color = InkFaded.copy(alpha = 0.6f), fontStyle = FontStyle.Italic),
+        modifier = Modifier.defaultMinSize(minHeight = 26.dp),
     )
 }
 
@@ -153,7 +153,7 @@ private fun TextBlock(
         value = block.text,
         onValueChange = { onTextChange(block.id, it) },
         textStyle = EditorTextStyle.copy(color = textColor),
-        cursorBrush = SolidColor(PureWhite),
+        cursorBrush = SolidColor(Ink),
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
         decorationBox = { innerTextField ->
             if (block.text.isEmpty()) Hint(emptyHint)
@@ -163,7 +163,7 @@ private fun TextBlock(
         // tapped to type into again.
         modifier = Modifier
             .fillMaxWidth()
-            .defaultMinSize(minHeight = 20.dp),
+            .defaultMinSize(minHeight = 26.dp),
     )
 }
 
@@ -197,14 +197,17 @@ private fun ImageBlock(
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 360.dp),
+                    .padding(vertical = Gap.sm)
+                    .heightIn(max = 360.dp)
+                    .clip(RoundedCornerShape(Corner.small))
+                    .border(2.dp, Outline, RoundedCornerShape(Corner.small)),
             )
         } else {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 72.dp)
-                    .border(width = 1.dp, color = BorderGray, shape = RoundedCornerShape(Corner.small)),
+                    .border(width = 2.dp, color = ParchmentEdge, shape = RoundedCornerShape(Corner.small)),
                 contentAlignment = Alignment.Center,
             ) {
                 Column(
@@ -214,11 +217,11 @@ private fun ImageBlock(
                 ) {
                     Text(
                         text = "image unavailable",
-                        style = EditorTextStyle.copy(color = TextMuted),
+                        style = EditorTextStyle.copy(color = InkFaded),
                     )
                     Text(
                         text = block.alt,
-                        style = EditorTextStyle.copy(fontSize = 12.sp, color = TextMuted),
+                        style = EditorTextStyle.copy(fontSize = 13.sp, color = InkFaded),
                     )
                 }
             }
@@ -228,13 +231,14 @@ private fun ImageBlock(
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(Gap.xs)
-                    .clip(RoundedCornerShape(Corner.small))
-                    .background(PureBlack.copy(alpha = 0.55f), RoundedCornerShape(Corner.small))
+                    .padding(top = Gap.sm + Gap.xs, end = Gap.xs)
+                    .clip(RoundedCornerShape(50))
+                    .background(Outline.copy(alpha = 0.7f), RoundedCornerShape(50))
+                    .semanticsLabel("Remove picture")
                     .clickable { onImageRemove(block.id) }
-                    .padding(horizontal = Gap.sm, vertical = Gap.xs),
+                    .padding(Gap.sm),
             ) {
-                IconClose(tint = TextWhite, size = 13.dp)
+                IconClose(tint = Parchment, size = 14.dp)
             }
         }
     }
@@ -285,10 +289,15 @@ fun SnapshotStateList<NoteBlock>.appendText(text: String) {
  * so capturing into a half-written sentence would weld `![cap](…)` onto it and the next time the note
  * is parsed the picture would be prose. Closing the sentence first is the whole job of the first
  * branch.
+ *
+ * A trailing *empty* block is dropped instead: it serializes to nothing, and left in place it is an
+ * orphaned blank line above the picture (the seeded block, or the one the previous capture opened).
  */
 fun SnapshotStateList<NoteBlock>.appendImage(alt: String, ref: String) {
     val last = lastOrNull()
-    if (last is NoteBlock.Text && last.text.isNotEmpty() && !last.text.endsWith("\n")) {
+    if (last is NoteBlock.Text && last.text.isEmpty()) {
+        removeAt(lastIndex)
+    } else if (last is NoteBlock.Text && !last.text.endsWith("\n")) {
         replaceText(last.id, last.text + "\n")
     }
     add(NoteBlock.Image(alt = alt, ref = ref))

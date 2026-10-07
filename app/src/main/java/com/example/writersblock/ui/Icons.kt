@@ -14,7 +14,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.example.writersblock.theme.TextWhite
+import com.example.writersblock.theme.Lavender
 
 /**
  * The app's icons, drawn rather than imported.
@@ -64,7 +64,7 @@ private const val W = 0.085f
 @Composable
 fun IconBack(
     modifier: Modifier = Modifier,
-    tint: Color = TextWhite,
+    tint: Color = Lavender,
     size: Dp = DefaultIconSize,
 ) = Glyph(tint, size, modifier) { u ->
     line(u, 0.62f, 0.18f, 0.24f, 0.5f, tint, W)
@@ -76,7 +76,7 @@ fun IconBack(
 @Composable
 fun IconClose(
     modifier: Modifier = Modifier,
-    tint: Color = TextWhite,
+    tint: Color = Lavender,
     size: Dp = DefaultIconSize,
 ) = Glyph(tint, size, modifier) { u ->
     line(u, 0.24f, 0.24f, 0.76f, 0.76f, tint, W)
@@ -87,7 +87,7 @@ fun IconClose(
 @Composable
 fun IconPlus(
     modifier: Modifier = Modifier,
-    tint: Color = TextWhite,
+    tint: Color = Lavender,
     size: Dp = DefaultIconSize,
 ) = Glyph(tint, size, modifier) { u ->
     line(u, 0.5f, 0.2f, 0.5f, 0.8f, tint, W)
@@ -98,7 +98,7 @@ fun IconPlus(
 @Composable
 fun IconFolder(
     modifier: Modifier = Modifier,
-    tint: Color = TextWhite,
+    tint: Color = Lavender,
     size: Dp = DefaultIconSize,
 ) = Glyph(tint, size, modifier) { u ->
     val stroke = Stroke(width = u * W, join = StrokeJoin.Round)
@@ -118,7 +118,7 @@ fun IconFolder(
 @Composable
 fun IconNote(
     modifier: Modifier = Modifier,
-    tint: Color = TextWhite,
+    tint: Color = Lavender,
     size: Dp = DefaultIconSize,
 ) = Glyph(tint, size, modifier) { u ->
     val stroke = Stroke(width = u * W, join = StrokeJoin.Round)
@@ -140,7 +140,7 @@ fun IconNote(
 @Composable
 fun IconScan(
     modifier: Modifier = Modifier,
-    tint: Color = TextWhite,
+    tint: Color = Lavender,
     size: Dp = DefaultIconSize,
 ) = Glyph(tint, size, modifier) { u ->
     val corner = 0.22f
@@ -156,7 +156,7 @@ fun IconScan(
 @Composable
 fun IconCheck(
     modifier: Modifier = Modifier,
-    tint: Color = TextWhite,
+    tint: Color = Lavender,
     size: Dp = DefaultIconSize,
 ) = Glyph(tint, size, modifier) { u ->
     line(u, 0.2f, 0.52f, 0.42f, 0.74f, tint, W)
@@ -167,7 +167,7 @@ fun IconCheck(
 @Composable
 fun IconSliders(
     modifier: Modifier = Modifier,
-    tint: Color = TextWhite,
+    tint: Color = Lavender,
     size: Dp = DefaultIconSize,
 ) = Glyph(tint, size, modifier) { u ->
     val w = W * 0.9f
@@ -181,7 +181,7 @@ fun IconSliders(
 @Composable
 fun IconChevronDown(
     modifier: Modifier = Modifier,
-    tint: Color = TextWhite,
+    tint: Color = Lavender,
     size: Dp = DefaultIconSize,
 ) = Glyph(tint, size, modifier) { u ->
     line(u, 0.22f, 0.38f, 0.5f, 0.66f, tint, W)
@@ -192,7 +192,7 @@ fun IconChevronDown(
 @Composable
 fun IconChevronRight(
     modifier: Modifier = Modifier,
-    tint: Color = TextWhite,
+    tint: Color = Lavender,
     size: Dp = DefaultIconSize,
 ) = Glyph(tint, size, modifier) { u ->
     line(u, 0.4f, 0.24f, 0.68f, 0.5f, tint, W)
@@ -203,7 +203,7 @@ fun IconChevronRight(
 @Composable
 fun IconMore(
     modifier: Modifier = Modifier,
-    tint: Color = TextWhite,
+    tint: Color = Lavender,
     size: Dp = DefaultIconSize,
 ) = Glyph(tint, size, modifier) { u ->
     drawCircle(tint, radius = 0.085f * u, center = Offset(0.5f * u, 0.24f * u))
@@ -215,7 +215,7 @@ fun IconMore(
 @Composable
 fun IconLink(
     modifier: Modifier = Modifier,
-    tint: Color = TextWhite,
+    tint: Color = Lavender,
     size: Dp = DefaultIconSize,
 ) = Glyph(tint, size, modifier) { u ->
     val stroke = Stroke(width = u * W, cap = StrokeCap.Round)
@@ -228,4 +228,22 @@ fun IconLink(
     )
     line(u, 0.34f, 0.52f, 0.46f, 0.64f, tint, W * 0.9f)
     line(u, 0.46f, 0.64f, 0.68f, 0.38f, tint, W * 0.9f)
+}
+
+/** A feather quill: writing something new. */
+@Composable
+fun IconQuill(
+    modifier: Modifier = Modifier,
+    tint: Color = Lavender,
+    size: Dp = DefaultIconSize,
+) = Glyph(tint, size, modifier) { u ->
+    val vane = Path().apply {
+        moveTo(0.86f * u, 0.12f * u)
+        quadraticTo(0.42f * u, 0.18f * u, 0.34f * u, 0.66f * u)
+        quadraticTo(0.80f * u, 0.56f * u, 0.86f * u, 0.12f * u)
+        close()
+    }
+    drawPath(vane, tint, style = Stroke(width = u * W, join = StrokeJoin.Round))
+    line(u, 0.80f, 0.20f, 0.40f, 0.60f, tint, W * 0.7f)
+    line(u, 0.34f, 0.66f, 0.16f, 0.86f, tint, W)
 }

@@ -1,6 +1,6 @@
 # WritersBlock — plan and status
 
-Last updated: 2026-09-25
+Last updated: 2026-10-07
 
 ## Context
 
@@ -50,6 +50,7 @@ The on-disk format is specified separately in [NOTE-FORMAT.md](NOTE-FORMAT.md).
 | 7 — The scan actually runs | **Done. Unit-tested. Not device-verified.** |
 | 8 — Interface pass | **Done. Not device-verified.** |
 | 9 — The capture stops being a picture of itself | **Done. The theme fix is verified in the compiled resource table. Not device-verified.** |
+| 10 — Castle redesign and scan fixes | **Done. Verified on the emulator (API 36). Not verified on a physical device.** |
 
 Everything below is verified to compile and to pass its unit tests (`assembleDebug`,
 `assembleRelease`, `testDebugUnitTest`). Nothing is verified on a physical device — the emulator was
@@ -305,45 +306,89 @@ succeeded, and kept a picture of our own black window.
    the teardown cannot be mistaken for the user revoking the capture that is just starting.
 
 
+### Phase 10 — castle redesign, scan fixes, emulator verification
+
+The first phase checked on a running system: the `Medium_Phone_API_36.1` emulator, driven over adb with
+screenshots. Phases 3–9 behaviour that the run confirmed is noted in Risks below.
+
+**What was wrong when the old build was run:**
+
+1. **The scan's consent dialog defaulted to "Share one app".** Android 14+ shows that first; picking it
+   sends the user through an app picker, brings that app to the front and leaves the crop screen behind
+   it. This is what "the scan mostly does not work" looked like. Consent is now requested with
+   `MediaProjectionConfig.createConfigForDefaultDisplay()` on API 34+, so the dialog offers the whole
+   screen and a single **Share screen** button. Phase 9's `bringToFront` and `EXTRA_NEW_CAPTURE`, which
+   only existed to recover from the single-app path, are deleted.
+2. **Settings showed a "CAPTURE — Granted" chip** that was really the notification permission. Capture
+   consent cannot be granted ahead of time. Renamed to what it is; the duplicate "recent captures" list
+   on that screen is gone (it was the home screen's recent notes again).
+3. **An orphaned empty line above every first capture.** `appendImage` now drops a trailing empty text
+   block instead of leaving it above the picture (two new tests in `NoteDocumentTest`).
+4. **Back did nothing in the drawer.** An overlay window has no back dispatcher. The drawer now catches
+   Back on a focusable root: it closes a sheet if one is open, otherwise rolls the drawer up.
+5. **Home read `OverlayService.isRunning` itself**, racing the service start. It is passed down from
+   `MainActivity`, which already tracks it.
+6. **Overlay windows used `TYPE_APPLICATION_OVERLAY` unconditionally**, which does not exist below API 26
+   (minSdk is 24). `TYPE_PHONE` is used there.
+
+**The redesign.** A cartoon-medieval look in purple and orange, built as one kit in `ui/Medieval.kt`:
+
+- Every screen sits on `CastleBackdrop`: a night-sky gradient, fixed-seed stars, a crescent moon rising
+  between two towers, and a crenellated castle wall with a lit window and an orange pennant. All Canvas
+  drawing; no image assets.
+- Screen titles are swallowtail ribbon `Banner`s; sections are marked with a small gold pennant.
+- Surfaces are `StoneCard`s (purple, thick dark outline, hard drop shadow). Buttons are `RoyalButton`s:
+  chunky blocks on a darker base that sink when pressed. Orange is the primary action, stone the rest,
+  red only for destruction.
+- **The drawer is a parchment scroll.** Wooden rollers top and bottom, ink on parchment. Opening it
+  unrolls the parchment down from the top roller (`ScrollPanel(unroll = …)`, a clip and an offset read
+  in the draw/layout phases only); closing rolls it back up. Dragging right still flings it away. Its
+  sheets are smaller scrolls that rise from the bottom.
+- The floating handle is the drawer rolled up: a small parchment roll tied with an orange ribbon.
+- Note editing, dialogs and the drawer are all written on parchment; the editor text is the system serif.
+- Fonts: MedievalSharp (OFL, `res/font/medieval_sharp.ttf`, licence in `docs/fonts-OFL.txt`) for names
+  and labels, the system serif for prose.
+- New launcher icon: a scroll with an orange wax seal on a night sky. (The legacy `mipmap-*/*.webp`
+  icons used on API 24–25 are still the template's.)
+
+**Verified on the emulator:** home, settings, library, editor, and dialogs render as designed; waking the
+drawer shows the handle; tapping it unrolls the scroll; the save sheet rises above the keyboard (the IME
+risk below); saving as a new note writes `Castle Notes.md` plus its `.assets/` picture and binds the
+drawer to it; a scan started from the drawer shows the whole-screen consent, the crop screen, and lands
+the picture plus OCR text back in the reopened drawer; Back closes the keyboard, then the drawer.
+
 ## Risks
 
-1. **IME in an overlay window** — still the main risk, and still unverified. The keyboard is drawn
-   above the overlay, so if neither `ADJUST_RESIZE` nor the inset is honoured the composer sits
-   behind it. Both mechanisms are in place; whether they fire is a device question.
+1. **IME in an overlay window** — works on the API 36 emulator: the drawer and its sheets move above the
+   keyboard. OEM keyboards and older Android versions are still unchecked.
 2. **`FLAG_SECURE` apps return a black frame** — banking, Netflix, some chat apps. Not fixable. Now
    reported on the crop screen instead of arriving as a silent black rectangle. Note that the
    blank-frame retry in Phase 9 costs such a capture about a second before it gives up looking.
 3. **MediaProjection re-consent.** Consent is requested on every capture, so Android shows its dialog
-   each time. Tolerable now; a per-gesture tax once capture is used more.
+   each time (now one tap: **Share screen**). Tolerable; a per-gesture tax once capture is used more.
 4. **Per-block text fields** mean the cursor cannot cross an image, and backspace at a block's start
    does not merge into the previous block.
 5. **The capture race is fixed by reasoning, not by observation.** Registering the listener first is
    the documented ordering, and it is the only explanation that fits "a still screen never captures",
    but nothing has confirmed it on hardware. If scanning still fails, the frame timeout now fires at
    5 s and says so instead of hanging.
-6. **The Phase 9 theme fix is verified in the resource table, not on a screen.** That the compiled
-   style carries `windowIsTranslucent` and a transparent background is checked, and it is exactly what
-   was missing. Whether a *translucent* window on this device is genuinely excluded from the mirror's
-   output is the part only hardware can answer — the app underneath staying visible is the same
-   mechanism that keeps the crop screen's own dimming off the captured frame, so the two are untested
-   together.
-7. **Bringing the capture screen to the front relies on the `SYSTEM_ALERT_WINDOW` exemption.** The
-   service already needs it to launch the screen at all, so this is the same footing rather than a new
-   dependency — but on a build that has not granted "display over other apps", the request is refused
-   and the crop stays behind the shared app. It is caught and ignored; the crop is one back gesture
-   away.
+6. **The Phase 9 transparency fix holds on the emulator:** the crop screen shows the app underneath,
+   not a black frame. `FLAG_SECURE` apps still return black and are still reported as such.
+7. **Below API 34 the consent dialog cannot be locked to the whole screen**, but those versions have no
+   "share one app" option either, so there is nothing to lock.
 8. **Every timing in the capture path is a guess.** 180 ms, 350 ms, 350 ms, and now 3 × 350 ms of
    retries: none of it has been measured against a real consent dialog on real hardware.
-9. **Nothing here has run on a device.** Every claim above is a reading of the code plus a green build.
+9. **Only the emulator has run this.** Everything marked verified was observed on the API 36 emulator,
+   not on physical hardware, OEM skins, or older Android versions.
 
 
 ## Verification
 
 ```bash
-./gradlew :app:testDebugUnitTest    # 94 tests: 32 format, 33 pending store, 19 document, 10 crop geometry
+./gradlew :app:testDebugUnitTest    # 96 tests: 32 format, 33 pending store, 21 document, 10 crop geometry
 ./gradlew :app:assembleDebug
 ./gradlew :app:assembleRelease
-./gradlew :app:lintDebug            # 0 errors, 33 warnings
+./gradlew :app:lintDebug            # 0 errors; warnings are dependency/KTX notices
 ```
 
 All four pass from a clean tree. The lint warnings are dependency-update notices plus two false
@@ -364,9 +409,7 @@ Manual, on device — the list below is the entire remaining gate:
    not the WritersBlock UI underneath it. If it is black and the warning says `FLAG_SECURE`, the app
    genuinely blocks capture; if it is black with no warning, the transparency is still not reaching the
    window.
-6. In the consent dialog choose **"Share a single app"** and pick an app. That app comes to the front —
-   confirm the crop screen comes back over it by itself rather than needing a trip through the recents
-   list, and that it never asks for consent a second time.
+6. The consent dialog offers only the whole screen and a single **Share screen** button (API 34+).
 7. Crop → **KEEP + READ**: confirm the image block and the OCR text both land in the drawer, and that
    the selected region is the region that arrives — not scaled or shifted. Try a drag up-and-left as
    well as one down-and-right; try FULL SCREEN.

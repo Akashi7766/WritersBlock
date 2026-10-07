@@ -4,28 +4,22 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 
-private val DarkColorScheme = darkColorScheme(
-    primary = PureWhite,
-    onPrimary = PureBlack,
-    secondary = TextGray,
-    onSecondary = SlateBlack,
-    background = SlateBlack,
-    onBackground = TextWhite,
-    surface = SlateDark,
-    onSurface = TextWhite,
-    outline = BorderGray
+private val CastleColors = darkColorScheme(
+    primary = Ember,
+    onPrimary = Outline,
+    secondary = Amethyst,
+    onSecondary = Lavender,
+    background = Night,
+    onBackground = Lavender,
+    surface = Stone,
+    onSurface = Lavender,
+    surfaceContainer = Stone,
+    outline = Outline,
+    error = Blood,
 )
 
+/** One fixed look: the castle does not follow the system's light or dynamic colours. */
 @Composable
-fun WritersBlockTheme(
-    darkTheme: Boolean = true, // Force dark theme
-    dynamicColor: Boolean = false, // Force monochrome scheme
-    content: @Composable () -> Unit
-) {
-    // We enforce our strict Minimalist Monochrome theme regardless of system settings
-    MaterialTheme(
-        colorScheme = DarkColorScheme,
-        typography = Typography,
-        content = content
-    )
+fun WritersBlockTheme(content: @Composable () -> Unit) {
+    MaterialTheme(colorScheme = CastleColors, typography = Typography, content = content)
 }

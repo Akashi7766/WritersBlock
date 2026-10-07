@@ -10,9 +10,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.graphics.Color
 import android.graphics.PixelFormat
-import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -21,13 +19,14 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import android.widget.LinearLayout
 import android.widget.Toast
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -55,6 +54,7 @@ import com.example.writersblock.data.parseNote
 import com.example.writersblock.data.serializeNote
 import com.example.writersblock.theme.WritersBlockTheme
 import com.example.writersblock.ui.OverlayDrawer
+import com.example.writersblock.ui.ScrollHandle
 import com.example.writersblock.ui.SaveRequest
 import com.example.writersblock.ui.appendImage
 import com.example.writersblock.ui.appendText
@@ -317,39 +317,22 @@ class OverlayService : Service(),
     }
 
     /**
-     * Draggable pill on the right edge. Tap to open the drawer, drag to reposition it, or flick it
-     * leftwards — the flick is the gesture the drawer's own swipe answers, so it works from the closed
-     * state too instead of only being able to put the drawer away.
+     * The rolled-up scroll on the right edge. Tap it to unroll the drawer, drag it up or down to move
+     * it, or flick it leftwards — the same gesture that pulls the drawer out.
      */
     private fun buildFloatingHandle() {
         val dp = resources.displayMetrics.density
-        // 16dp was under half the 48dp minimum touch target, which made the drag — the one gesture the
-        // handle exists for — the hardest thing in the app to hit. 22dp is still a thin edge strip and
-        // is a great deal easier to catch.
-        val width = (22 * dp).toInt()
-        val height = (88 * dp).toInt()
+        // Wide enough to catch with a thumb; a thinner strip made the drag the hardest gesture to hit.
+        val width = (30 * dp).toInt()
+        val height = (104 * dp).toInt()
 
-        val pill = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            // A capsule with a hairline edge. A plain white pill is invisible against a white app.
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = width / 2f
-                setColor(Color.WHITE)
-                setStroke((1 * dp).toInt(), 0x33000000)
-            }
-            clipToOutline = true
-            elevation = 6f * dp
+        val pill = ComposeView(this).apply {
+            setViewTreeLifecycleOwner(this@OverlayService)
+            setViewTreeSavedStateRegistryOwner(this@OverlayService)
+            setViewTreeViewModelStoreOwner(this@OverlayService)
+            setContent { ScrollHandle(Modifier.fillMaxSize()) }
+            contentDescription = "Open the WritersBlock drawer"
         }
-
-        // A grip, so the pill reads as something to grab rather than as a rendering artefact.
-        pill.addView(
-            View(this).apply {
-                setBackgroundColor(0x99000000.toInt())
-                layoutParams = LinearLayout.LayoutParams((3 * dp).toInt(), (30 * dp).toInt())
-            }
-        )
 
         val params = overlayParams(width, height).apply {
             gravity = Gravity.END or Gravity.CENTER_VERTICAL
@@ -459,7 +442,7 @@ class OverlayService : Service(),
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            overlayWindowType(),
             closedDrawerFlags(),
             PixelFormat.TRANSLUCENT
         ).apply {
@@ -686,10 +669,6 @@ class OverlayService : Service(),
         postDelayed(180) {
             val intent = Intent(this, CaptureActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                // Tells a capture screen that is already alive that this really is a new capture. It
-                // asks for consent again; without the extra it would be a plain "come to the front",
-                // which the screen also sends to itself, and those must not put a dialog up.
-                putExtra(EXTRA_NEW_CAPTURE, true)
             }
             runCatching { startActivity(intent) }.onFailure {
                 toast("Could not start the capture screen")
@@ -773,11 +752,20 @@ class OverlayService : Service(),
 
     private fun overlayParams(w: Int, h: Int) = WindowManager.LayoutParams(
         w, h,
-        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+        overlayWindowType(),
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
         PixelFormat.TRANSLUCENT
     )
+
+    /** TYPE_APPLICATION_OVERLAY only exists from API 26; below it, TYPE_PHONE is the overlay type. */
+    @Suppress("DEPRECATION")
+    private fun overlayWindowType() =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            WindowManager.LayoutParams.TYPE_PHONE
+        }
 
     private fun toast(message: String) =
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
@@ -799,8 +787,8 @@ class OverlayService : Service(),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("WritersBlock Active")
-            .setContentText("Tap to open the capture drawer")
+            .setContentTitle("The scroll is ready")
+            .setContentText("Tap to unroll the WritersBlock drawer")
             .setSmallIcon(android.R.drawable.ic_menu_edit)
             .setOngoing(true)
             .setContentIntent(togglePi)

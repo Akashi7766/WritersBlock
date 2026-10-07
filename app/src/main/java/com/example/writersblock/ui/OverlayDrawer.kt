@@ -2,10 +2,10 @@ package com.example.writersblock.ui
 
 import android.content.Context
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.draggable
@@ -27,19 +27,15 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -47,44 +43,37 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.writersblock.data.FileRepository
 import com.example.writersblock.data.NoteBlock
 import com.example.writersblock.data.NoteItem
-import com.example.writersblock.theme.BorderGray
-import com.example.writersblock.theme.BorderBright
-import com.example.writersblock.theme.Corner
-import com.example.writersblock.theme.Danger
+import com.example.writersblock.theme.Blood
 import com.example.writersblock.theme.Gap
-import com.example.writersblock.theme.PureBlack
-import com.example.writersblock.theme.PureWhite
-import com.example.writersblock.theme.SlateBlack
-import com.example.writersblock.theme.SlateDark
-import com.example.writersblock.theme.TextGray
-import com.example.writersblock.theme.TextMuted
-import com.example.writersblock.theme.TextWhite
+import com.example.writersblock.theme.Ink
+import com.example.writersblock.theme.InkFaded
+import com.example.writersblock.theme.NightDeep
+import com.example.writersblock.theme.ParchmentEdge
+import com.example.writersblock.theme.WoodLight
 import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.math.roundToInt
 
-/** Where the drawer's contents should go when the user hits SAVE. */
+/** Where the drawer's contents should go when the user hits Save. */
 sealed interface SaveRequest {
     /** Add the pending blocks to the end of the note the drawer is bound to. */
     data object AppendToBound : SaveRequest
@@ -96,38 +85,22 @@ sealed interface SaveRequest {
     data class AsNewNote(val folderPath: String?, val name: String) : SaveRequest
 }
 
-private val LabelStyle = TextStyle(
-    fontFamily = FontFamily.Monospace,
-    fontSize = 10.sp,
-    fontWeight = FontWeight.Bold,
-    letterSpacing = 0.1.sp,
-)
-
-private val BodyStyle = TextStyle(
-    fontFamily = FontFamily.Monospace,
-    fontSize = 13.sp,
-    color = TextWhite,
-)
-
 /**
- * The overlay drawer's whole interface, in one overlay window.
+ * The overlay drawer: a parchment scroll that unrolls down the right side of the screen.
  *
- * This is one composable rather than a view tree with an embedded `ComposeView`, for two reasons. The
- * editor is shared with the in-app one instead of being reimplemented ([NoteDocument]), and the drawer
- * becomes swipable: its position is an animatable the drag gesture writes to, which a `WindowManager`
- * translation could not be dragged through smoothly.
+ * One composable in one full-screen overlay window, so the editor is shared with the in-app one
+ * ([NoteDocument]) and every gesture is a Compose gesture. While closed, the service makes the whole
+ * window untouchable and invisible, so it never steals a tap from the app underneath.
  *
- * The window is full screen so the scrim can cover the app behind it. While the drawer is closed the
- * service makes the entire window untouchable, so the scrim never steals a tap from the app
- * underneath — the panel is simply parked off the right edge.
+ * Opening unrolls the scroll from its top roller; closing rolls it back up. Dragging it to the right
+ * flings it away. Both animations are read in the layout and draw phases only — reading them during
+ * composition would recompose the editor, the note lists and the picker on every frame.
  *
- * Sheets are drawn inside this composable rather than with `Dialog` or `ModalBottomSheet`. A dialog
- * needs a window token, and a service has none: `Dialog` from a service throws `BadTokenException`
- * unless its window type is set to an overlay type by hand. A sheet that is a sibling in the same `Box`
- * costs nothing and cannot fail that way.
+ * Sheets are drawn inside this window rather than with `Dialog`: a dialog needs a window token and a
+ * service has none, so `Dialog` from here throws `BadTokenException`.
  *
- * @param isOpen set by the service. The panel animates in when it becomes true; closing is driven from
- *   here so a swipe is not cut short by the window flags changing under it.
+ * @param isOpen set by the service. The scroll unrolls when it becomes true; closing is driven from
+ *   here so the roll-up is not cut short by the window flags changing under it.
  * @param onBind binds the drawer to a note path, or unbinds it when given an empty string.
  */
 @Composable
@@ -152,89 +125,108 @@ fun OverlayDrawer(
 ) {
     val density = LocalDensity.current
 
-    // An overlay window is not reliably told about the system bars. A drawer whose header sits under
-    // the status bar is unreadable, so take the larger of the reported inset and a sane minimum —
-    // right whether or not insets arrive.
+    // An overlay window is not reliably told about the system bars, so take the larger of the reported
+    // inset and a sane minimum.
     val statusTop = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
     val navBottom = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
-    val topInset = maxOf(statusTop, 12.dp)
 
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        val panelWidth: Dp = minOf(340.dp, maxWidth * 0.92f)
+    val unroll = remember { Animatable(0f) }
+    val dragX = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    var sheet by remember { mutableStateOf<DrawerSheet?>(null) }
+    val rootFocus = remember { FocusRequester() }
+
+    /** Rolls the scroll up, then tells the service to make the window passive again. */
+    fun dismiss() {
+        scope.launch {
+            unroll.animateTo(0f, tween(240, easing = FastOutSlowInEasing))
+            dragX.snapTo(0f)
+            onRequestClose()
+        }
+    }
+
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxSize()
+            // An overlay window has no back dispatcher, so Back is caught here: it closes an open sheet
+            // first, then the drawer. The keyboard, when up, takes the first Back itself.
+            .onPreviewKeyEvent { event ->
+                if (event.key != Key.Back || !isOpen) return@onPreviewKeyEvent false
+                if (event.type == KeyEventType.KeyUp) {
+                    if (sheet != null) sheet = null else dismiss()
+                }
+                true
+            }
+            // Focusable so Back is delivered even when no text field has the focus.
+            .focusRequester(rootFocus)
+            .focusable()
+    ) {
+        val panelWidth: Dp = minOf(360.dp, maxWidth * 0.94f)
         val panelWidthPx = with(density) { panelWidth.toPx() }
 
-        val offsetX = remember(panelWidthPx) { Animatable(panelWidthPx) }
-        val scope = rememberCoroutineScope()
-        var sheet by remember { mutableStateOf<DrawerSheet?>(null) }
-
-        /** Slides the panel out, then tells the service to make the window passive again. */
-        fun dismiss() {
+        /** The drag-to-dismiss path: carries on in the direction of the swipe instead of rolling up. */
+        fun flingAway() {
             scope.launch {
-                offsetX.animateTo(panelWidthPx, tween(180))
+                dragX.animateTo(panelWidthPx, tween(160))
+                unroll.snapTo(0f)
+                dragX.snapTo(0f)
                 onRequestClose()
             }
         }
 
-        LaunchedEffect(isOpen, panelWidthPx) {
+        LaunchedEffect(isOpen) {
             if (isOpen) {
-                offsetX.animateTo(0f, tween(220))
-            } else if (offsetX.value < panelWidthPx) {
-                // Closed by something that did not animate — the capture flow hiding the window, or
-                // the service restarting. Snap: the window is already non-interactive.
-                offsetX.snapTo(panelWidthPx)
+                // Not an error if it fails: the window may not be focusable for another frame yet.
+                runCatching { rootFocus.requestFocus() }
+                dragX.snapTo(0f)
+                unroll.animateTo(1f, tween(380, easing = FastOutSlowInEasing))
+            } else if (unroll.value > 0f) {
+                // Closed by something that did not animate — the capture flow hiding the window, or the
+                // service restarting. Snap: the window is already non-interactive.
+                unroll.snapTo(0f)
+                dragX.snapTo(0f)
             }
         }
 
-        // 1 when fully open, 0 when parked. Drives the scrim so it fades with the panel rather than
-        // appearing a frame before it.
-        //
-        // The scrim's alpha is read inside the draw lambda, not here. Reading `offsetX.value` in the
-        // composition would recompose the whole drawer — editor, note lists and all — on every frame
-        // of the slide; a draw-phase read re-runs only the draw.
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .drawBehind {
-                    val progress = 1f - (offsetX.value / panelWidthPx).coerceIn(0f, 1f)
-                    if (progress > 0.01f) {
-                        drawRect(PureBlack.copy(alpha = 0.55f * progress))
-                    }
+                    val shown = unroll.value * (1f - dragX.value / panelWidthPx)
+                    if (shown > 0.01f) drawRect(NightDeep.copy(alpha = 0.6f * shown))
                 }
                 .pointerInput(Unit) { detectTapGestures { dismiss() } }
         )
 
-        Column(
+        ScrollPanel(
+            unroll = { unroll.value },
             modifier = Modifier
-                .align(Alignment.CenterEnd)
+                .align(Alignment.TopEnd)
                 .width(panelWidth)
                 .fillMaxHeight()
-                // The keyboard is drawn *above* an application overlay, so an unresized window ends up
+                .padding(top = maxOf(statusTop, 12.dp) + Gap.xs, bottom = Gap.xs, end = Gap.xs)
+                // The keyboard is drawn above an application overlay, so an unresized window ends up
                 // with its composer behind it. If the window manager honours ADJUST_RESIZE the window
                 // itself shrinks and this inset is zero, so the two never double up.
                 .imePadding()
-                .offset { IntOffset(offsetX.value.roundToInt(), 0) }
-                .background(SlateBlack)
-                // Drag right to put it away. Horizontal only, so the note lists inside still scroll
-                // vertically, and a drag that starts inside a text field selects text as it should —
-                // the field consumes it before this sees anything.
+                .offset { IntOffset(dragX.value.roundToInt(), 0) }
+                // Horizontal only, so the lists inside still scroll vertically and a drag that starts in
+                // a text field still selects text — the field consumes it first.
                 .draggable(
                     orientation = Orientation.Horizontal,
                     state = rememberDraggableState { delta ->
-                        scope.launch {
-                            offsetX.snapTo((offsetX.value + delta).coerceIn(0f, panelWidthPx))
-                        }
+                        scope.launch { dragX.snapTo((dragX.value + delta).coerceIn(0f, panelWidthPx)) }
                     },
                     onDragStopped = { velocity ->
-                        val draggedFar = offsetX.value > panelWidthPx * 0.35f
-                        if (draggedFar || velocity > 900f) {
-                            dismiss()
+                        if (dragX.value > panelWidthPx * 0.35f || velocity > 900f) {
+                            flingAway()
                         } else {
-                            scope.launch { offsetX.animateTo(0f, tween(180)) }
+                            scope.launch { dragX.animateTo(0f, tween(180)) }
                         }
                     },
-                )
+                ),
         ) {
-            DrawerHeader(onDismiss = ::dismiss, topInset = topInset)
+            DrawerHeader(onDismiss = ::dismiss)
 
             ModeBar(
                 boundNotePath = boundNotePath,
@@ -250,7 +242,7 @@ fun OverlayDrawer(
                         .fillMaxWidth()
                         .weight(0.5f),
                 )
-                Hairline()
+                InkRule()
             }
 
             PendingEditor(
@@ -259,9 +251,9 @@ fun OverlayDrawer(
                 onImageRemove = onPendingImageRemove,
                 focusRequestId = focusRequestId,
                 hint = if (boundNotePath.isEmpty()) {
-                    "scratch — nothing is kept until you hit SAVE"
+                    "A loose page: nothing is kept until you Save."
                 } else {
-                    "SAVE appends this to ${File(boundNotePath).name}"
+                    "Save adds this to ${File(boundNotePath).nameWithoutExtension}."
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -270,7 +262,7 @@ fun OverlayDrawer(
 
             DrawerFooter(
                 pendingBlocks = pendingBlocks,
-                bottomInset = maxOf(navBottom, 6.dp),
+                bottomInset = maxOf(navBottom - Gap.lg, 0.dp),
                 onCopy = onCopy,
                 onPaste = onPaste,
                 onCapture = onCapture,
@@ -281,21 +273,23 @@ fun OverlayDrawer(
         sheet?.let { current ->
             Box(
                 modifier = Modifier
-                    .align(Alignment.CenterEnd)
+                    .align(Alignment.TopEnd)
                     .width(panelWidth)
-                    .fillMaxHeight(),
+                    .fillMaxHeight()
+                    .imePadding(),
             ) {
                 SheetScaffold(
                     title = when (current) {
-                        DrawerSheet.Save -> "SAVE TO"
-                        DrawerSheet.PickNote -> "BIND DRAWER TO NOTE"
+                        DrawerSheet.Save -> "Save to…"
+                        DrawerSheet.PickNote -> "Bind to a Note"
                     },
+                    bottomInset = navBottom,
                     onDismiss = { sheet = null },
                 ) { dismissSheet ->
                     when (current) {
                         DrawerSheet.Save -> SaveSheet(
                             boundNotePath = boundNotePath,
-                            hasContent = pendingBlocks.isNotEmpty(),
+                            hasContent = pendingBlocks.any { it is NoteBlock.Image || (it is NoteBlock.Text && it.text.isNotBlank()) },
                             onSave = { request ->
                                 onSave(request)
                                 dismissSheet()
@@ -319,44 +313,25 @@ fun OverlayDrawer(
 
 private enum class DrawerSheet { Save, PickNote }
 
-// ── Header and mode ───────────────────────────────────────────────────────────────────────────
+// ── Header and mode ───────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun DrawerHeader(onDismiss: () -> Unit, topInset: Dp) {
-    Column(modifier = Modifier.fillMaxWidth().padding(top = topInset)) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = Gap.md, end = Gap.xs, top = Gap.xs, bottom = Gap.xs),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Grip. The whole panel drags, but nothing on screen said so.
-            Column(
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-                modifier = Modifier.padding(end = 10.dp),
-            ) {
-                repeat(3) {
-                    Box(
-                        modifier = Modifier
-                            .width(14.dp)
-                            .height(2.dp)
-                            .background(TextMuted, RoundedCornerShape(1.dp))
-                    )
-                }
-            }
-
-            Text(
-                text = "CAPTURE DRAWER",
-                style = LabelStyle.copy(fontSize = 11.sp, letterSpacing = 0.18.sp),
-                color = TextWhite,
-                modifier = Modifier.weight(1f),
-            )
-
-            IconAction(label = "Close drawer", onClick = onDismiss, size = 34.dp) { tint ->
-                IconClose(tint = tint, size = 15.dp)
-            }
+private fun DrawerHeader(onDismiss: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = Gap.lg, end = Gap.xs, top = Gap.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "The Scroll",
+            style = MaterialTheme.typography.titleLarge,
+            color = Ink,
+            modifier = Modifier.weight(1f),
+        )
+        IconAction(label = "Roll up the drawer", onClick = onDismiss, size = 40.dp, tint = Ink) { tint ->
+            IconClose(tint = tint, size = 16.dp)
         }
-        Hairline()
     }
 }
 
@@ -371,34 +346,36 @@ private fun ModeBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(SlateDark)
-            .padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+            .padding(start = Gap.lg, end = Gap.sm, bottom = Gap.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        StatusDot(active = bound, size = 7.dp)
+        StatusDot(active = bound)
         Spacer(Modifier.width(Gap.sm))
-
         Text(
-            text = if (bound) File(boundNotePath).name else "SCRATCH",
-            style = LabelStyle.copy(fontSize = 11.sp),
-            color = if (bound) TextWhite else TextMuted,
+            text = if (bound) File(boundNotePath).nameWithoutExtension else "Loose page",
+            style = MaterialTheme.typography.labelLarge,
+            color = if (bound) Ink else InkFaded,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-
-        SheetButton(label = if (bound) "CHANGE" else "BIND", onClick = onPickNote)
         if (bound) {
-            Spacer(Modifier.width(Gap.xs))
-            IconAction(label = "Unbind drawer", onClick = onUnbind, size = 30.dp) { tint ->
+            IconAction(label = "Unbind the drawer", onClick = onUnbind, size = 36.dp, tint = InkFaded) { tint ->
                 IconClose(tint = tint, size = 13.dp)
             }
         }
+        RoyalButton(
+            label = if (bound) "Change" else "Bind",
+            kind = ButtonKind.Parchment,
+            height = 38.dp,
+            icon = { tint -> IconLink(tint = tint, size = 14.dp) },
+            onClick = onPickNote,
+        )
     }
-    Hairline()
+    InkRule()
 }
 
-// ── Note content ──────────────────────────────────────────────────────────────────────────────
+// ── Note content ──────────────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun BoundNotePreview(
@@ -409,13 +386,13 @@ private fun BoundNotePreview(
     val noteFile = remember(notePath) { File(notePath) }
 
     Column(modifier = modifier) {
-        DrawerLabel(if (blocks.isEmpty()) "THE BOUND NOTE IS EMPTY" else "IN THIS NOTE")
+        DrawerLabel(if (blocks.isEmpty()) "THE BOUND NOTE IS EMPTY" else "ALREADY IN THIS NOTE")
         if (blocks.isEmpty()) {
             Text(
                 text = "Anything you write below lands in it.",
-                style = BodyStyle.copy(fontSize = 12.sp),
-                color = TextMuted,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.bodySmall.copy(fontStyle = FontStyle.Italic),
+                color = InkFaded,
+                modifier = Modifier.padding(horizontal = Gap.lg, vertical = Gap.sm),
             )
         } else {
             NoteDocument(
@@ -423,8 +400,8 @@ private fun BoundNotePreview(
                 resolveImage = remember(noteFile) { noteImageResolver(noteFile) },
                 editable = false,
                 onTextChange = { _, _ -> },
-                textColor = TextGray,
-                contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 14.dp),
+                textColor = InkFaded,
+                contentPadding = PaddingValues(start = Gap.lg, end = Gap.lg, top = Gap.xs, bottom = Gap.md),
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
@@ -453,14 +430,13 @@ private fun PendingEditor(
     }
 
     Column(modifier = modifier) {
-        DrawerLabel("CAPTURE")
         NoteDocument(
             blocks = blocks,
             resolveImage = remember { stagedImageResolver() },
             editable = true,
             onTextChange = onTextChange,
             onImageRemove = onImageRemove,
-            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 14.dp),
+            contentPadding = PaddingValues(start = Gap.lg, end = Gap.lg, top = Gap.md, bottom = Gap.md),
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
@@ -468,14 +444,13 @@ private fun PendingEditor(
         )
         Text(
             text = hint,
-            style = BodyStyle.copy(fontSize = 10.sp),
-            color = TextMuted,
+            style = MaterialTheme.typography.bodySmall.copy(fontStyle = FontStyle.Italic),
+            color = InkFaded,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier
                 .fillMaxWidth()
-                .background(SlateDark)
-                .padding(horizontal = 14.dp, vertical = 5.dp),
+                .padding(horizontal = Gap.lg, vertical = Gap.xs),
         )
     }
 }
@@ -496,63 +471,43 @@ private fun DrawerFooter(
     }
     val images = pendingBlocks.count { it is NoteBlock.Image }
 
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Hairline()
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SlateDark)
-                .padding(horizontal = Gap.md, vertical = Gap.sm),
-            horizontalArrangement = Arrangement.spacedBy(Gap.sm),
-        ) {
-            SheetButton(label = "COPY", onClick = onCopy, modifier = Modifier.weight(1f))
-            SheetButton(label = "PASTE", onClick = onPaste, modifier = Modifier.weight(1f))
-            // SCAN is the reason the drawer exists and was previously one of three identical grey
-            // buttons. It gets the icon and the brighter edge so it reads as the action, not an option.
-            SheetButton(
-                label = "SCAN",
-                onClick = onCapture,
-                modifier = Modifier.weight(1.2f),
-                accent = true,
-                icon = { tint -> IconScan(tint = tint, size = 13.dp) },
-            )
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Gap.md)
+            .padding(bottom = Gap.sm + bottomInset),
+    ) {
+        InkRule(modifier = Modifier.padding(bottom = Gap.sm))
+        // Scan is the reason the drawer exists, so it is the wide, orange one.
+        RoyalButton(
+            label = "Scan the Screen",
+            kind = ButtonKind.Primary,
+            icon = { tint -> IconScan(tint = tint, size = 18.dp) },
+            onClick = onCapture,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(Gap.sm))
+        Row(horizontalArrangement = Arrangement.spacedBy(Gap.sm), verticalAlignment = Alignment.CenterVertically) {
+            RoyalButton(label = "Copy", kind = ButtonKind.Parchment, height = 40.dp, onClick = onCopy, modifier = Modifier.weight(1f))
+            RoyalButton(label = "Paste", kind = ButtonKind.Parchment, height = 40.dp, onClick = onPaste, modifier = Modifier.weight(1f))
+            RoyalButton(label = "Save", kind = ButtonKind.Stone, height = 40.dp, onClick = onSave, modifier = Modifier.weight(1.1f))
         }
-
-        Hairline()
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SlateDark)
-                .padding(start = Gap.md, end = Gap.md, top = Gap.sm)
-                .padding(bottom = Gap.sm + bottomInset),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Gap.sm),
-        ) {
-            Text(
-                text = buildString {
-                    append(words).append(if (words == 1) " word" else " words")
-                    if (images > 0) append("  ·  ").append(images).append(" img")
-                },
-                style = BodyStyle.copy(fontSize = 10.sp),
-                color = TextMuted,
-                modifier = Modifier.weight(1f),
-            )
-
-            SheetButton(
-                label = "SAVE",
-                onClick = onSave,
-                primary = true,
-                horizontalPadding = 20.dp,
-            )
-        }
+        Text(
+            text = buildString {
+                append(words).append(if (words == 1) " word" else " words")
+                if (images > 0) append("  ·  ").append(images).append(if (images == 1) " picture" else " pictures")
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = InkFaded,
+            modifier = Modifier.padding(top = Gap.xs, start = Gap.xs),
+        )
     }
 }
 
-// ── Sheets ────────────────────────────────────────────────────────────────────────────────────
+// ── Sheets ────────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * A bottom sheet drawn inside the drawer's own window.
+ * A smaller scroll that rises from the bottom of the drawer's own window.
  *
  * [content] receives the dismiss action it should call, so a sheet that closes after doing something
  * still slides away instead of vanishing.
@@ -560,6 +515,7 @@ private fun DrawerFooter(
 @Composable
 private fun SheetScaffold(
     title: String,
+    bottomInset: Dp,
     onDismiss: () -> Unit,
     content: @Composable (dismiss: () -> Unit) -> Unit,
 ) {
@@ -573,45 +529,38 @@ private fun SheetScaffold(
         }
     }
 
-    LaunchedEffect(Unit) { progress.animateTo(1f, tween(220)) }
+    LaunchedEffect(Unit) { progress.animateTo(1f, tween(240, easing = FastOutSlowInEasing)) }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // Same deferred read as the drawer's own scrim: the slide is a draw-phase change, not a
-        // reason to recompose whatever the sheet is showing.
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .drawBehind { drawRect(PureBlack.copy(alpha = 0.5f * progress.value)) }
+                .drawBehind { drawRect(NightDeep.copy(alpha = 0.55f * progress.value)) }
                 .pointerInput(Unit) { detectTapGestures { close() } }
         )
 
-        Column(
+        ScrollCard(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .offset { IntOffset(0, ((1f - progress.value) * 700f).roundToInt()) }
-                .clip(RoundedCornerShape(topStart = Corner.sheet, topEnd = Corner.sheet))
-                .background(SlateBlack)
-                .border(1.dp, BorderGray, RoundedCornerShape(topStart = Corner.sheet, topEnd = Corner.sheet))
-                .padding(bottom = Gap.md),
+                .padding(horizontal = Gap.xs)
+                .padding(bottom = bottomInset + Gap.xs)
+                .offset { IntOffset(0, ((1f - progress.value) * 900f).roundToInt()) }
+                // Swallow taps so they do not fall through to the scrim and close the sheet.
+                .pointerInput(Unit) { detectTapGestures { } },
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = Gap.lg, end = Gap.xs, top = Gap.md, bottom = Gap.sm),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = title,
-                    style = LabelStyle.copy(fontSize = 11.sp, letterSpacing = 0.18.sp),
-                    color = TextWhite,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = Ink,
                     modifier = Modifier.weight(1f),
                 )
-                IconAction(label = "Close", onClick = { close() }, size = 34.dp) { tint ->
+                IconAction(label = "Close", onClick = { close() }, size = 40.dp, tint = Ink) { tint ->
                     IconClose(tint = tint, size = 15.dp)
                 }
             }
-            Hairline()
+            InkRule(modifier = Modifier.padding(vertical = Gap.xs))
             content(::close)
         }
     }
@@ -625,36 +574,34 @@ private fun SaveSheet(
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
-    val boundName = if (boundNotePath.isEmpty()) "" else File(boundNotePath).name
+    val boundName = if (boundNotePath.isEmpty()) "" else File(boundNotePath).nameWithoutExtension
 
     var newNoteName by remember { mutableStateOf("") }
-    var destinationFolder by remember {
-        mutableStateOf(FileRepository.getNotesRoot(context).absolutePath)
-    }
+    var destinationFolder by remember { mutableStateOf(FileRepository.getNotesRoot(context).absolutePath) }
     var pickingFolder by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         if (!hasContent) {
             Text(
-                text = "Nothing to save yet.",
-                style = BodyStyle.copy(fontSize = 12.sp),
-                color = TextMuted,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                text = "The page is blank: write or scan something first.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = InkFaded,
+                modifier = Modifier.padding(vertical = Gap.md),
             )
         } else {
             if (boundName.isNotEmpty()) {
                 SheetRow(
-                    title = "APPEND TO $boundName",
-                    subtitle = "Adds to the end of the bound note. Captures move into its assets folder.",
-                    primary = true,
+                    title = "Add to $boundName",
+                    subtitle = "Writes this at the end of the bound note.",
                     onClick = { onSave(SaveRequest.AppendToBound) },
                 )
                 SheetRow(
-                    title = "REPLACE $boundName",
-                    subtitle = "Discards what the bound note holds and writes this instead.",
+                    title = "Replace $boundName",
+                    subtitle = "Throws away what the note holds and writes this instead.",
                     danger = true,
                     onClick = { onSave(SaveRequest.ReplaceBound) },
                 )
+                InkRule(modifier = Modifier.padding(vertical = Gap.sm))
             }
 
             if (pickingFolder) {
@@ -664,86 +611,75 @@ private fun SaveSheet(
                     onNavigate = { destinationFolder = it },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 200.dp),
+                        .heightIn(max = 220.dp),
                 )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 6.dp),
+                        .padding(vertical = Gap.sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         text = relativePath(context, destinationFolder),
-                        style = BodyStyle.copy(fontSize = 11.sp),
-                        color = TextMuted,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Ink,
                         modifier = Modifier.weight(1f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    SheetButton(label = "DONE", primary = true, onClick = { pickingFolder = false })
+                    RoyalButton(label = "Here", kind = ButtonKind.Primary, height = 38.dp, onClick = { pickingFolder = false })
                 }
             } else {
-                DrawerLabel("NEW NOTE")
+                DrawerLabel("AS A NEW NOTE")
+                InkField(
+                    value = newNoteName,
+                    onValueChange = { newNoteName = it },
+                    hint = "Note name",
+                    onDone = {
+                        if (newNoteName.isNotBlank()) onSave(SaveRequest.AsNewNote(destinationFolder, newNoteName.trim()))
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .border(1.dp, BorderGray, RoundedCornerShape(Corner.small))
-                            .padding(horizontal = 10.dp, vertical = 9.dp)
-                    ) {
-                        if (newNoteName.isEmpty()) {
-                            Text("note_name", style = BodyStyle.copy(fontSize = 12.sp), color = TextMuted)
-                        }
-                        BasicTextField(
-                            value = newNoteName,
-                            onValueChange = { newNoteName = it },
-                            singleLine = true,
-                            textStyle = BodyStyle.copy(fontSize = 12.sp),
-                            cursorBrush = SolidColor(PureWhite),
-                            keyboardOptions = KeyboardOptions(
-                                capitalization = KeyboardCapitalization.Sentences
-                            ),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    SheetButton(
-                        label = "CREATE",
-                        primary = newNoteName.isNotBlank(),
-                        onClick = {
-                            if (newNoteName.isNotBlank()) {
-                                onSave(SaveRequest.AsNewNote(destinationFolder, newNoteName.trim()))
-                            }
-                        },
-                    )
-                }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 14.dp, end = 14.dp, top = 6.dp),
+                        .padding(top = Gap.xs),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         text = "in " + relativePath(context, destinationFolder),
-                        style = BodyStyle.copy(fontSize = 10.sp),
-                        color = TextMuted,
-                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = InkFaded,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { pickingFolder = true }
+                            .padding(vertical = Gap.sm),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    SheetButton(label = "CHANGE", onClick = { pickingFolder = true })
+                    Text(
+                        text = "Change",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = WoodLight,
+                        modifier = Modifier
+                            .clickable { pickingFolder = true }
+                            .padding(Gap.sm),
+                    )
                 }
+                Spacer(Modifier.height(Gap.sm))
+                DialogButtons(
+                    confirmLabel = "Create",
+                    confirmEnabled = newNoteName.isNotBlank(),
+                    onConfirm = { onSave(SaveRequest.AsNewNote(destinationFolder, newNoteName.trim())) },
+                    onDismiss = onClose,
+                )
             }
         }
 
-        Spacer(Modifier.height(10.dp))
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp)) {
-            SheetButton(label = "CANCEL", onClick = onClose, modifier = Modifier.weight(1f))
+        // The new-note form has its own Cancel beside Create; every other state needs one here.
+        if (!hasContent || pickingFolder) {
+            Spacer(Modifier.height(Gap.sm))
+            RoyalButton(label = "Cancel", kind = ButtonKind.Parchment, onClick = onClose, modifier = Modifier.fillMaxWidth())
         }
     }
 }
@@ -758,43 +694,37 @@ private fun NotePickerSheet(
     var folderPath by remember { mutableStateOf(root.absolutePath) }
 
     var folderItems by remember { mutableStateOf<List<NoteItem>>(emptyList()) }
-    val recents = remember(root) { FileRepository.getRecentNotes(context, 6) }
+    val recents = remember(root) { FileRepository.getRecentNotes(context, 5) }
 
     LaunchedEffect(folderPath) {
         folderItems = FileRepository.listItems(context, folderPath)
     }
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = relativePath(context, folderPath),
-                style = BodyStyle.copy(fontSize = 11.sp),
-                color = TextMuted,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (folderPath != root.absolutePath) {
-                SheetButton(
-                    label = "UP",
-                    onClick = {
-                        folderPath = File(folderPath).parentFile?.absolutePath ?: root.absolutePath
-                    },
+        if (folderPath != root.absolutePath) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = relativePath(context, folderPath),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = InkFaded,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                RoyalButton(
+                    label = "Up",
+                    kind = ButtonKind.Parchment,
+                    height = 36.dp,
+                    onClick = { folderPath = File(folderPath).parentFile?.absolutePath ?: root.absolutePath },
                 )
             }
         }
-        Hairline()
 
-        LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 260.dp)) {
+        LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp)) {
             if (folderPath == root.absolutePath && recents.isNotEmpty()) {
                 item { DrawerLabel("RECENT") }
                 items(recents, key = { "recent:" + it.path }) { note ->
-                    NoteRow(item = note) { onPick(note.path) }
+                    PickRow(item = note) { onPick(note.path) }
                 }
                 item { DrawerLabel("ALL NOTES") }
             }
@@ -803,33 +733,29 @@ private fun NotePickerSheet(
                 if (item.isDirectory) {
                     FolderRow(name = item.name) { folderPath = item.path }
                 } else {
-                    NoteRow(item = item) { onPick(item.path) }
+                    PickRow(item = item) { onPick(item.path) }
                 }
             }
 
             if (folderItems.isEmpty()) {
                 item {
                     Text(
-                        text = "No notes in this folder.",
-                        style = BodyStyle.copy(fontSize = 12.sp),
-                        color = TextMuted,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                        text = "No notes here yet.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = InkFaded,
+                        modifier = Modifier.padding(vertical = Gap.md),
                     )
                 }
             }
         }
 
-        Hairline()
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp)) {
-            SheetButton(
-                label = "USE SCRATCH INSTEAD",
-                onClick = { onPick("") },
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp)) {
-            SheetButton(label = "CANCEL", onClick = onClose, modifier = Modifier.weight(1f))
-        }
+        Spacer(Modifier.height(Gap.sm))
+        DialogButtons(
+            confirmLabel = "Loose Page",
+            confirmKind = ButtonKind.Stone,
+            onConfirm = { onPick("") },
+            onDismiss = onClose,
+        )
     }
 }
 
@@ -850,7 +776,7 @@ private fun FolderList(
     LazyColumn(modifier = modifier) {
         if (folderPath != root.absolutePath) {
             item {
-                FolderRow(name = ".. up") {
+                FolderRow(name = "‹ Up a level") {
                     onNavigate(File(folderPath).parentFile?.absolutePath ?: root.absolutePath)
                 }
             }
@@ -861,74 +787,32 @@ private fun FolderList(
         if (folders.isEmpty() && folderPath == root.absolutePath) {
             item {
                 Text(
-                    text = "No folders yet — notes saved here land in the root.",
-                    style = BodyStyle.copy(fontSize = 11.sp),
-                    color = TextMuted,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    text = "No folders yet: the note will go in the library itself.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = InkFaded,
+                    modifier = Modifier.padding(vertical = Gap.sm),
                 )
             }
         }
     }
 }
 
-// ── Small shared pieces ───────────────────────────────────────────────────────────────────────
+// ── Small shared pieces ───────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun DrawerLabel(text: String) {
-    Text(
+    ScrollLabel(
         text = text,
-        style = LabelStyle.copy(fontSize = 9.sp, letterSpacing = 0.2.sp),
-        color = TextMuted,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 4.dp),
+            .padding(start = Gap.lg, end = Gap.lg, top = Gap.sm, bottom = Gap.xs),
     )
 }
 
-/**
- * The drawer's one button.
- *
- * Denser than the in-app [PillButton] — the panel is 340dp wide and the labels are monospace — but it
- * shares the shapes and the three tones, so the two never drift apart.
- */
+/** A faded ink line across the scroll. */
 @Composable
-private fun SheetButton(
-    label: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    primary: Boolean = false,
-    accent: Boolean = false,
-    horizontalPadding: Dp = 10.dp,
-    icon: (@Composable (Color) -> Unit)? = null,
-) {
-    val border = when {
-        primary -> PureWhite
-        accent -> BorderBright
-        else -> BorderGray
-    }
-
-    Row(
-        modifier = modifier
-            .border(1.dp, border, RoundedCornerShape(Corner.small))
-            .background(if (primary) PureWhite else Color.Transparent, RoundedCornerShape(Corner.small))
-            .clickable(onClick = onClick)
-            .padding(horizontal = horizontalPadding, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center,
-    ) {
-        if (icon != null) {
-            icon(if (primary) PureBlack else TextWhite)
-            Spacer(Modifier.width(Gap.xs))
-        }
-        Text(
-            text = label,
-            style = LabelStyle,
-            color = if (primary) PureBlack else TextWhite,
-            maxLines = 1,
-        )
-    }
+private fun InkRule(modifier: Modifier = Modifier) {
+    Rule(color = ParchmentEdge, modifier = modifier.padding(horizontal = Gap.md))
 }
 
 @Composable
@@ -936,28 +820,22 @@ private fun SheetRow(
     title: String,
     subtitle: String,
     onClick: () -> Unit,
-    primary: Boolean = false,
     danger: Boolean = false,
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .padding(vertical = Gap.sm)
     ) {
         Text(
             text = title,
-            style = LabelStyle.copy(fontSize = 12.sp),
-            color = when {
-                danger -> Danger
-                primary -> PureWhite
-                else -> TextGray
-            },
+            style = MaterialTheme.typography.titleMedium,
+            color = if (danger) Blood else Ink,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        Spacer(Modifier.height(Gap.hairline))
-        Text(text = subtitle, style = BodyStyle.copy(fontSize = 10.sp), color = TextMuted)
+        Text(text = subtitle, style = MaterialTheme.typography.bodySmall, color = InkFaded)
     }
 }
 
@@ -967,15 +845,15 @@ private fun FolderRow(name: String, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 11.dp),
+            .padding(vertical = Gap.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconFolder(tint = TextMuted, size = 15.dp)
-        Spacer(Modifier.width(10.dp))
+        IconFolder(tint = WoodLight, size = 18.dp)
+        Spacer(Modifier.width(Gap.md))
         Text(
             text = name,
-            style = BodyStyle,
-            color = TextWhite,
+            style = MaterialTheme.typography.labelLarge,
+            color = Ink,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -983,35 +861,40 @@ private fun FolderRow(name: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun NoteRow(item: NoteItem, onClick: () -> Unit) {
-    Column(
+private fun PickRow(item: NoteItem, onClick: () -> Unit) {
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 9.dp)
+            .padding(vertical = Gap.sm),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = item.name,
-            style = BodyStyle.copy(fontSize = 12.sp, fontWeight = FontWeight.Bold),
-            color = TextWhite,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (item.contentSnippet.isNotEmpty()) {
+        IconNote(tint = WoodLight, size = 18.dp)
+        Spacer(Modifier.width(Gap.md))
+        Column {
             Text(
-                text = item.contentSnippet,
-                style = BodyStyle.copy(fontSize = 10.sp),
-                color = TextMuted,
+                text = item.name,
+                style = MaterialTheme.typography.labelLarge,
+                color = Ink,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (item.contentSnippet.isNotEmpty()) {
+                Text(
+                    text = item.contentSnippet,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = InkFaded,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
 
-/** `/Ideas` rather than an absolute path, for the sheet breadcrumbs. */
+/** `/Ideas` rather than an absolute path. */
 private fun relativePath(context: Context, path: String): String {
     val root = FileRepository.getNotesRoot(context)
     val relative = runCatching { File(path).relativeTo(root).path }.getOrNull().orEmpty()
-    return if (relative.isEmpty() || relative == ".") "/" else "/$relative"
+    return if (relative.isEmpty() || relative == ".") "the library" else "/$relative"
 }

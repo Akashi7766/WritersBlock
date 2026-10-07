@@ -2,11 +2,10 @@
 <resources>
 
     <!--
-      Dark, because every screen in the app is dark. The light parent showed a white frame for the
-      first paint, before Compose had drawn anything.
+      The night-sky colour, so the first frame before Compose draws matches the screens that follow.
     -->
     <style name="Theme.WritersBlock" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowBackground">@color/night_deep</item>
     </style>
 
     <!--

@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.writersblock.data.FileRepository
@@ -173,21 +174,22 @@ fun FileEditorScreen(
     val charCount = prose.length
     val lineCount = remember(prose) { if (prose.isEmpty()) 0 else prose.count { it == '\n' } + 1 }
 
-    Surface(
-        modifier = modifier.fillMaxSize(),
-        color = SlateBlack
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+    CastleBackdrop(modifier) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .safeDrawingPadding()
+        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = Gap.sm, vertical = Gap.xs),
+                    .padding(start = Gap.sm, end = Gap.md, top = Gap.sm, bottom = Gap.sm),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconAction(
                     label = "Back",
                     onClick = { if (isChanged) showUnsavedDialog = true else onBack() }
-                ) { tint -> IconBack(tint = tint) }
+                ) { tint -> IconBack(tint = tint, size = 22.dp) }
 
                 Spacer(modifier = Modifier.width(Gap.xs))
 
@@ -202,17 +204,19 @@ fun FileEditorScreen(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = fileName,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = TextWhite,
+                            style = MaterialTheme.typography.titleLarge,
+                            color = Lavender,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        // The folder is what tells two notes of the same name apart.
                         Text(
-                            // The folder is what tells two notes of the same name apart, and the
-                            // editor was previously the one screen that hid it.
-                            text = currentFilePath!!.let { File(it).parentFile?.name ?: "" },
+                            text = currentFilePath!!.let { path ->
+                                val parent = File(path).parentFile
+                                if (parent == null || parent == FileRepository.getNotesRoot(context)) "Library" else parent.name
+                            },
                             style = MaterialTheme.typography.labelSmall,
-                            color = TextMuted,
+                            color = Mist,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -221,41 +225,42 @@ fun FileEditorScreen(
 
                 Box {
                     IconAction(label = "More actions", onClick = { showMenu = true }) { tint ->
-                        IconMore(tint = tint)
+                        IconMore(tint = tint, size = 22.dp)
                     }
 
                     DropdownMenu(
                         expanded = showMenu,
                         onDismissRequest = { showMenu = false },
-                        containerColor = SlateDark,
-                        border = BorderStroke(1.dp, BorderGray),
+                        containerColor = Parchment,
+                        border = BorderStroke(2.dp, Outline),
                         shape = RoundedCornerShape(Corner.medium)
                     ) {
                         DropdownMenuItem(
-                            text = { MenuLabel(if (currentFilePath == null) "SAVE" else "SAVE A COPY…") },
+                            text = { MenuLabel(if (currentFilePath == null) "Save" else "Save a copy…") },
                             onClick = {
                                 showMenu = false
                                 showSaveAsDialog = true
                             }
                         )
                         DropdownMenuItem(
-                            text = { MenuLabel("SEND TO OVERLAY") },
+                            text = { MenuLabel("Bind the drawer to this note") },
                             onClick = {
                                 showMenu = false
                                 sendToOverlay()
                             }
                         )
                         DropdownMenuItem(
-                            text = { MenuLabel("SEND TEXT TO OVERLAY") },
+                            text = { MenuLabel("Send the text to the drawer") },
                             onClick = {
                                 showMenu = false
                                 if (prose.isBlank()) {
                                     Toast.makeText(context, "Nothing to send", Toast.LENGTH_SHORT).show()
+                                } else if (!OverlayService.isRunning) {
+                                    Toast.makeText(context, "Wake the drawer in Settings first", Toast.LENGTH_LONG).show()
                                 } else {
-                                    // Joins the drawer's pending document rather than becoming a
-                                    // note: prose that is on its way somewhere that is not a note yet.
-                                    OverlayService.openDrawer(context)
+                                    // Joins the drawer's pending document rather than becoming a note.
                                     OverlayService.pushTextToDrawer(context, prose)
+                                    OverlayService.openDrawer(context)
                                     Toast.makeText(context, "Sent to the drawer", Toast.LENGTH_SHORT).show()
                                 }
                             }
@@ -265,52 +270,50 @@ fun FileEditorScreen(
 
                 Spacer(modifier = Modifier.width(Gap.xs))
 
-                if (isChanged) {
-                    FilledAction(
-                        label = "SAVE",
-                        onClick = { save() },
-                        modifier = Modifier.widthIn(min = 72.dp)
-                    )
-                } else {
-                    PillButton(
-                        label = "SAVE",
-                        onClick = { save() },
-                        modifier = Modifier.widthIn(min = 72.dp)
-                    )
-                }
+                RoyalButton(
+                    label = "Save",
+                    kind = if (isChanged) ButtonKind.Primary else ButtonKind.Stone,
+                    height = 42.dp,
+                    onClick = { save() },
+                    modifier = Modifier.widthIn(min = 76.dp)
+                )
             }
 
-            Hairline()
-
-            // Monospace Editor space
             val noteFile = currentFilePath?.let { File(it) }
-            NoteDocument(
-                blocks = blocks,
-                resolveImage = remember(noteFile) { noteImageResolver(noteFile) },
-                editable = true,
-                onTextChange = { id, text -> blocks.replaceText(id, text) },
-                // Padding is applied inside the list so lines scroll under the header instead of
-                // being clipped at its edge.
-                contentPadding = PaddingValues(horizontal = Gap.lg, vertical = Gap.md),
+            ScrollPanel(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-            )
+                    .padding(horizontal = Gap.sm)
+                    .padding(bottom = Gap.sm)
+            ) {
+                NoteDocument(
+                    blocks = blocks,
+                    resolveImage = remember(noteFile) { noteImageResolver(noteFile) },
+                    editable = true,
+                    onTextChange = { id, text -> blocks.replaceText(id, text) },
+                    // Padding inside the list, so lines scroll under the roller instead of being cut at it.
+                    contentPadding = PaddingValues(horizontal = Gap.lg, vertical = Gap.md),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                )
 
-            MetricsBar(
-                wordCount = wordCount,
-                charCount = charCount,
-                lineCount = lineCount,
-                imageCount = imageCount
-            )
+                MetricsBar(
+                    wordCount = wordCount,
+                    charCount = charCount,
+                    lineCount = lineCount,
+                    imageCount = imageCount
+                )
+            }
         }
     }
 
     if (showSaveAsDialog) {
         NameDialog(
-            title = if (currentFilePath == null) "NAME THIS NOTE" else "SAVE A COPY AS",
-            hint = "note_name",
-            confirmLabel = "SAVE",
+            title = if (currentFilePath == null) "Name this Note" else "Save a Copy",
+            hint = "Note name",
+            confirmLabel = "Save",
             initial = fileName,
             onDismiss = { showSaveAsDialog = false },
             onConfirm = { name ->
@@ -320,50 +323,44 @@ fun FileEditorScreen(
     }
 
     if (showUnsavedDialog) {
-        AlertDialog(
-            onDismissRequest = { showUnsavedDialog = false },
-            containerColor = SlateDark,
-            shape = RoundedCornerShape(Corner.large),
-            title = { DialogTitle("UNSAVED CHANGES") },
-            text = {
-                Text(
-                    text = "This note has changes that are not written to disk yet.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextGray
-                )
-            },
-            confirmButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(Gap.xs)) {
-                    DialogAction(
-                        label = "DISCARD",
-                        color = Danger,
-                        onClick = {
+        ScrollDialog(title = "Unsaved Words", onDismiss = { showUnsavedDialog = false }) {
+            Text(
+                text = "This note has changes that are not written down yet.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Ink,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(Gap.lg))
+            RoyalButton(
+                label = "Save & Leave",
+                kind = ButtonKind.Primary,
+                modifier = Modifier.fillMaxWidth(),
+                onClick = {
+                    if (currentFilePath == null && fileName.isBlank()) {
+                        showUnsavedDialog = false
+                        showSaveAsDialog = true
+                    } else {
+                        val saved = currentFilePath?.let { writeToCurrentFile() } ?: saveAs(fileName)
+                        if (saved) {
                             showUnsavedDialog = false
                             onBack()
                         }
-                    )
-                    DialogAction(
-                        label = "SAVE & EXIT",
-                        onClick = {
-                            if (currentFilePath == null && fileName.isBlank()) {
-                                showUnsavedDialog = false
-                                showSaveAsDialog = true
-                            } else {
-                                val saved = currentFilePath?.let { writeToCurrentFile() }
-                                    ?: saveAs(fileName)
-                                if (saved) {
-                                    showUnsavedDialog = false
-                                    onBack()
-                                }
-                            }
-                        }
-                    )
+                    }
                 }
-            },
-            dismissButton = {
-                DialogAction(label = "CANCEL", onClick = { showUnsavedDialog = false }, muted = true)
-            }
-        )
+            )
+            Spacer(Modifier.height(Gap.sm))
+            DialogButtons(
+                confirmLabel = "Discard",
+                confirmKind = ButtonKind.Danger,
+                onConfirm = {
+                    showUnsavedDialog = false
+                    onBack()
+                },
+                onDismiss = { showUnsavedDialog = false },
+                dismissLabel = "Keep Writing"
+            )
+        }
     }
 }
 
@@ -379,8 +376,8 @@ private fun InlineNameField(
         value = value,
         onValueChange = onChange,
         singleLine = true,
-        textStyle = MaterialTheme.typography.titleSmall.copy(color = TextWhite),
-        cursorBrush = SolidColor(PureWhite),
+        textStyle = MaterialTheme.typography.titleLarge.copy(color = Lavender),
+        cursorBrush = SolidColor(Gold),
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
         keyboardActions = KeyboardActions(onDone = { onDone() }),
         modifier = modifier,
@@ -388,9 +385,9 @@ private fun InlineNameField(
             Box(modifier = Modifier.fillMaxWidth()) {
                 if (value.isEmpty()) {
                     Text(
-                        text = "untitled",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = TextMuted
+                        text = "Untitled",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = Mist
                     )
                 }
                 inner()
@@ -399,7 +396,7 @@ private fun InlineNameField(
     )
 }
 
-/** The document's measurements, along the bottom edge. */
+/** The document's measurements, along the foot of the scroll. */
 @Composable
 private fun MetricsBar(
     wordCount: Int,
@@ -410,44 +407,21 @@ private fun MetricsBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(SlateDark)
             .padding(horizontal = Gap.lg, vertical = Gap.sm),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = buildString {
-                append("$wordCount words")
-                append("  ·  $charCount chars")
+        ScrollLabel(
+            buildString {
+                append("$wordCount words  ·  $charCount chars")
                 if (imageCount > 0) append("  ·  $imageCount image${if (imageCount == 1) "" else "s"}")
-            },
-            style = MaterialTheme.typography.labelSmall,
-            color = TextMuted
+            }
         )
-        Text(
-            text = if (lineCount == 1) "1 line" else "$lineCount lines",
-            style = MaterialTheme.typography.labelSmall,
-            color = TextMuted
-        )
+        ScrollLabel(if (lineCount == 1) "1 line" else "$lineCount lines")
     }
-}
-
-/** A one-pixel rule. Used to separate a header from its content without a shadow. */
-@Composable
-internal fun Hairline(color: Color = BorderGray) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(1.dp)
-            .background(color)
-    )
 }
 
 @Composable
 private fun MenuLabel(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-        color = TextWhite
-    )
+    Text(text = text, style = MaterialTheme.typography.labelLarge, color = Ink)
 }
