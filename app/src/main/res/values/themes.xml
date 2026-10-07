@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+      Dark, because every screen in the app is dark. The light parent showed a white frame for the
+      first paint, before Compose had drawn anything.
+    -->
+    <style name="Theme.WritersBlock" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+
+    <!--
+      The capture screen, minus the cutout attribute. It has to let the app underneath stay visible —
+      the screenshot is taken while it is on screen, and an opaque window ends up in the capture.
+
+      The transparency lives in a "Base" style of its own because values-v27 defines the same style
+      name again for windowLayoutInDisplayCutoutMode, and a qualified style REPLACES the unqualified
+      one rather than merging with it. With the items spelled out here and the cutout item in
+      values-v27, every device on API 27+ lost the lot: the capture screen fell back to the black
+      window background above, and each scan mirrored our own black window and nothing else.
+    -->
+    <style name="Theme.WritersBlock.Transparent.Base" parent="Theme.WritersBlock">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowShowWallpaper">false</item>
+    </style>
+
+    <!-- Pre-API-27: no cutout attribute exists, so the base style is the whole story. -->
+    <style name="Theme.WritersBlock.Transparent" parent="Theme.WritersBlock.Transparent.Base" />
+</resources>

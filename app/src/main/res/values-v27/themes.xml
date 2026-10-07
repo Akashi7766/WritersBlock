@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+      Draw the capture screen into the cutout area on devices that have one. Without it the crop
+      surface is inset around the notch and a selection near the top of the screen cannot reach the
+      part of the screenshot drawn under it.
+
+      Only the cutout item is repeated: everything else is inherited from .Base. This file must not
+      redefine the transparency items itself, or they would be the only version that exists — and on
+      every device new enough to read this file, they would be missing entirely.
+    -->
+    <style name="Theme.WritersBlock.Transparent" parent="Theme.WritersBlock.Transparent.Base">
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>
