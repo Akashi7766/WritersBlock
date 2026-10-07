@@ -23,12 +23,16 @@ import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import com.example.writersblock.service.OverlayService
 import com.example.writersblock.theme.WritersBlockTheme
+import com.example.writersblock.ui.importShare
 
 class MainActivity : ComponentActivity() {
 
     private var hasOverlayPermission by mutableStateOf(false)
     private var hasNotificationPermission by mutableStateOf(false)
     private var isServiceRunning by mutableStateOf(false)
+
+    /** A note made from something shared into the app, waiting to be opened in the editor. */
+    private var sharedNotePath by mutableStateOf<String?>(null)
 
     // Standard runtime permission launcher for POST_NOTIFICATIONS (Android 13+)
     private val requestNotificationPermissionLauncher =
@@ -63,6 +67,8 @@ class MainActivity : ComponentActivity() {
         )
 
         updatePermissionStates()
+        // Only on a fresh start: a recreated activity would import the same share a second time.
+        if (savedInstanceState == null) handleShare(intent)
 
         setContent {
             WritersBlockTheme {
@@ -86,10 +92,29 @@ class MainActivity : ComponentActivity() {
                         hasNotificationPermission = hasNotificationPermission,
                         onRequestNotificationPermission = {
                             requestNotificationPermission()
-                        }
+                        },
+                        sharedNotePath = sharedNotePath,
+                        onSharedNoteOpened = { sharedNotePath = null }
                     )
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleShare(intent)
+    }
+
+    /** "Share → WritersBlock": file what was shared as a new note and open it. */
+    private fun handleShare(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_SEND && intent?.action != Intent.ACTION_SEND_MULTIPLE) return
+        val note = importShare(this, intent)
+        if (note == null) {
+            Toast.makeText(this, "Nothing in that share could be kept", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(this, "Kept as ${note.nameWithoutExtension}", Toast.LENGTH_SHORT).show()
+            sharedNotePath = note.absolutePath
         }
     }
 

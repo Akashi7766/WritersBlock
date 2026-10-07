@@ -1,7 +1,6 @@
 package com.example.writersblock.ui
 
 import android.widget.Toast
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -85,12 +84,10 @@ fun FileBrowserScreen(
 
     val atRoot = currentFolder.absolutePath == rootDir.absolutePath
 
-    // Back goes up one level while there is one, and only leaves the library from the top.
-    val up: () -> Unit = {
-        val parent = currentFolder.parentFile
-        if (atRoot || parent == null) onBack() else onNavigate(FileBrowser(parent.absolutePath))
-    }
-    BackHandler { up() }
+    // Folders are entered by opening them from the one above, so Back pops the screen and lands on the
+    // parent. Pushing the parent instead made Back from the library return to the subfolder it came
+    // from, and the two screens bounced the user between them.
+    val up: () -> Unit = onBack
 
     CastleBackdrop(modifier) {
         Column(

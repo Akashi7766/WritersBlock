@@ -40,7 +40,9 @@ ANDROID_SDK=C:/Users/kashi/AppData/Local/Android/Sdk
 "$ANDROID_SDK/platform-tools/adb.exe" shell pm grant com.example.writersblock android.permission.POST_NOTIFICATIONS
 ```
 
-Reinstalling kills the overlay service; wake it again from Settings. Emulator-verified is still not
+Reinstalling kills the overlay service; wake it again from Settings. If a phone is also connected,
+pass `-s emulator-5554` to every adb call. In Git Bash set `MSYS_NO_PATHCONV=1` before passing
+device paths like `/sdcard/...`. Emulator-verified is still not
 physical-device-verified (see the Risks in `PLAN.md`).
 
 ## Architecture
@@ -55,12 +57,17 @@ Package `com.example.writersblock`:
   - `NoteFormat.kt`: `NoteBlock` (Text | Image), `parseNote` / `serializeNote`, assets-dir naming, and
     the image-ref guard.
   - `FileRepository`: the notes tree under `filesDir/notes`. Lists, snippets and deletes. It skips
-    `*.assets` dirs, and deleting a note also deletes its assets dir.
+    `*.assets` dirs, and deleting a note also deletes its assets dir. Creating a note or folder never
+    reuses an existing name: it becomes "Name (2)" (`uniqueChild`).
+  - `DraftStore`: the in-app editor's crash-safe autosave, one draft file per note under
+    `filesDir/drafts`. A draft is not the note; Save writes the note and clears the draft.
+  - `DocxWriter` (pure JVM, tested) and `PdfWriter` (Android `PdfDocument`): export a note's blocks.
   - `CaptureStore`: bitmap downscale and staging of captured PNGs before they belong to a note.
   - `PendingStore.kt`: a length-prefixed codec (`WB1`) for the drawer's unsaved document. Staged image refs
     in it are absolute paths until commit, when `materializeBlocks` moves them into the note's assets dir.
-  - `AppPreferences`: SharedPreferences. `overlayActiveFilePath` is the mode flag itself: empty means
-    scratch mode, a path means the drawer is bound to that note.
+  - `AppPreferences`: SharedPreferences. `overlayActiveFilePath` is the drawer's page: empty is the
+    loose page, a path is a note opened in it. `overlayPending` is that page's draft (autosaved on
+    every edit) and `overlayBaseline` the page as last loaded or saved; draft != baseline means unsaved.
 - `ui/Medieval.kt`: the **design kit**, every themed shape drawn with Canvas (no image assets):
   `CastleBackdrop` (night sky, moon, castle wall: every screen sits on one), `Banner`, `PennantLabel`,
   `StoneCard`, `RoyalButton` (+ `ButtonKind`), `ScrollPanel` / `ScrollCard` / `Roller` (the parchment
@@ -71,9 +78,15 @@ Package `com.example.writersblock`:
 - `service/OverlayService`: a foreground service that is also its own `LifecycleOwner`,
   `SavedStateRegistryOwner` and `ViewModelStoreOwner`, so it can host a `ComposeView` in `WindowManager`.
   It owns the floating handle and the full-screen drawer window (both Compose: `ScrollHandle`, `ui/OverlayDrawer.kt`).
-  It holds the pending blocks and mirrors them to prefs on every edit. Its companion exposes a static
+  It owns the drawer's page model: one draft at a time, the whole bound note editable, Save writes
+  it, and switching pages with unsaved changes raises Save / Append / Discard (`requestSwitch`,
+  `resolveSwitch`). Its companion exposes a static
   `instance` and is the only bridge to the rest of the app (`openDrawer`, `capture`, `pushTextToDrawer`,
   `deliverCapture`, …).
+- `ui/Sharing.kt` and `ui/FolderPicker.kt`: share a note to any app (text + pictures through the
+  `FileProvider`, authority `${applicationId}.files`, paths in `res/xml/file_paths.xml`), export as
+  PDF / Word (save via the system file picker, or share), turn a "Share → WritersBlock" intent into
+  a note (`importShare`), and the folder chooser with New Folder used by every save dialog.
 - `service/CaptureActivity`: a transparent activity. It handles MediaProjection consent, grabs a frame,
   shows the crop screen, runs OCR, then calls `OverlayService.deliverCapture`. `CropGeometry` is the
   screen↔bitmap coordinate math, extracted so it can be tested.
@@ -110,5 +123,12 @@ Dark screens use stone + lavender text; anything written on (editor, drawer, dia
   consent (`onCaptureStarted`). Size the display from `maximumWindowMetrics`, not `displayMetrics`.
   On API 34+ consent is requested with `MediaProjectionConfig.createConfigForDefaultDisplay()`; without it
   Android defaults to "Share one app", which sends the user through an app picker.
+- **`CaptureActivity` has its own `taskAffinity`.** Sharing the app's task made starting it bring
+  MainActivity to the front, so scans captured WritersBlock instead of the app the user was in.
+- **A drawer draft mixes reference kinds:** absolute paths are captures still in staging, relative
+  ones are the bound note's own pictures. `materialize` moves only the absolute ones; resolve images
+  with `draftImageResolver`.
+- **The Settings app hides third-party overlays** (`HIDE_NON_SYSTEM_OVERLAY_WINDOWS`). Test the
+  handle and drawer over an ordinary app such as Clock.
 - **Qualified resource styles replace the unqualified one; they do not merge with it.** Transparency
   items live in `Theme.WritersBlock.Transparent.Base`, which both `values/` and `values-v27/` inherit.

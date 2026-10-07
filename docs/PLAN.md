@@ -1,6 +1,6 @@
 # WritersBlock — plan and status
 
-Last updated: 2026-10-07
+Last updated: 2026-10-07 (Phase 11)
 
 ## Context
 
@@ -51,6 +51,7 @@ The on-disk format is specified separately in [NOTE-FORMAT.md](NOTE-FORMAT.md).
 | 8 — Interface pass | **Done. Not device-verified.** |
 | 9 — The capture stops being a picture of itself | **Done. The theme fix is verified in the compiled resource table. Not device-verified.** |
 | 10 — Castle redesign and scan fixes | **Done. Verified on the emulator (API 36). Not verified on a physical device.** |
+| 11 — Editable drawer, drafts, folders, sharing, export | **Done. Verified on the emulator (API 36). Not verified on a physical device.** |
 
 Everything below is verified to compile and to pass its unit tests (`assembleDebug`,
 `assembleRelease`, `testDebugUnitTest`). Nothing is verified on a physical device — the emulator was
@@ -357,6 +358,49 @@ risk below); saving as a new note writes `Castle Notes.md` plus its `.assets/` p
 drawer to it; a scan started from the drawer shows the whole-screen consent, the crop screen, and lands
 the picture plus OCR text back in the reopened drawer; Back closes the keyboard, then the drawer.
 
+### Phase 11 — the drawer edits notes, nothing is lost, and notes leave the app
+
+What the user reported after Phase 10, and what each turned out to be:
+
+1. **"Scan goes straight to WritersBlock instead of the app I'm in."** `CaptureActivity` shared the
+   app's task, so starting it from the overlay brought `MainActivity` to the front with it and the
+   transparent capture screen showed WritersBlock. It now has its own `taskAffinity` and opens on top
+   of whatever app is in use. The home screen's Scan button now steps aside (`moveTaskToBack`) and scans
+   the app that was open before; scanning WritersBlock itself was never useful.
+2. **"I can't change what's already written in the scroll."** The bound note was a read-only preview
+   above an append-only draft. The drawer now has one page at a time: the loose page, or a note opened
+   in full and editable. Scans land at the end of it. **Save** writes the page into the note.
+3. **Autosave.** Every edit is written to a crash-safe draft immediately (the drawer's in prefs, the
+   editor's in `filesDir/drafts` through `DraftStore`), never to the note itself. A killed app comes
+   back with the unsaved words, still marked unsaved. The editor's old 30-second write-into-the-note
+   autosave is gone; it made Save meaningless.
+4. **Switching pages with unsaved changes** asks: **Save** (for a loose page: save it as a new note),
+   **Append to the end of** the note being opened (loose page only: appending a saved note's own text
+   to another would copy it wholesale), **Discard**, or Cancel.
+5. **"Save to folders doesn't work."** There was no way to make a folder while saving, and the
+   editor's save dialog had no folder choice at all. Both now use `FolderPicker`: where you are, Up,
+   the folders inside, and New Folder. Two bugs found on the way: creating a note with an existing
+   name **overwrote the existing note**, and "save a copy" left the copy's pictures pointing into the
+   original's assets folder (so they would show as raw text). Names are now made unique; a copy gets
+   its own copies of the pictures.
+6. **Connected to the user's notes app**, through the share sheet in both directions (no notes app
+   on Android has a public API for this): Share sends a note's text and pictures to Keep, Samsung
+   Notes, OneNote, Drive, anything; "Share → WritersBlock" from any app turns the shared text and
+   pictures into a new note and opens it.
+7. **Export to PDF and Word**: `PdfWriter` (A4, flows onto as many pages as needed, pictures fitted to
+   the page) and `DocxWriter` (a minimal .docx Word, Google Docs and LibreOffice open; pictures
+   embedded and fitted to the page). Each can be saved through the system file picker or shared.
+8. Also fixed: Back in a subfolder pushed the parent as a new screen, so Back from the library bounced
+   to the subfolder again; it now pops.
+
+**Verified on the emulator:** a scan from the drawer over the Clock app crops the Clock app; Home's
+Scan crops the previously open app; loose page → Save → New Folder "Quests" → saved as
+`Quests/Bridge.md`; editing the bound note marks it unsaved; reinstalling (process killed) brings the
+unsaved edit back; switching pages raises the prompt, and Save-then-open and Append both write the
+right file; a sharing intent creates and opens a note; PDF and Word exports open with text and the
+picture (the .docx was unzipped and every XML part parsed); Share opens the system sheet with text
+and picture attached.
+
 ## Risks
 
 1. **IME in an overlay window** — works on the API 36 emulator: the drawer and its sheets move above the
@@ -385,7 +429,7 @@ the picture plus OCR text back in the reopened drawer; Back closes the keyboard,
 ## Verification
 
 ```bash
-./gradlew :app:testDebugUnitTest    # 96 tests: 32 format, 33 pending store, 21 document, 10 crop geometry
+./gradlew :app:testDebugUnitTest    # 112 tests: format, pending store, document, crop geometry, files, drafts, docx
 ./gradlew :app:assembleDebug
 ./gradlew :app:assembleRelease
 ./gradlew :app:lintDebug            # 0 errors; warnings are dependency/KTX notices
@@ -417,9 +461,10 @@ Manual, on device — the list below is the entire remaining gate:
    appreciably faster than the read path does on the same region.
 9. **Capture with the drawer closed** — the drawer must be open afterwards, holding the capture. Then
    the same from the drawer's own SCAN button, and confirm the drawer is open again after.
-10. SAVE → each of append, replace and new-note-with-a-folder; verify in the app.
-11. Bind the drawer to an existing note → confirm its text is readable above the composer → append →
-    verify in the app.
+10. Drawer: open a note with Notes, edit inside it, Save; switch pages with unsaved changes and try
+    Save / Append / Discard; save a loose page into a new folder; verify each in the app.
+11. Export a note with a picture as PDF and as Word, open both on the phone; share a note to the
+    notes app you use, and share something from it into WritersBlock.
 12. Kill the service mid-sentence → reopen → draft survives.
 13. In `FileBrowserScreen`, walk two folders deep and confirm back goes up one level each time, the
     breadcrumbs navigate, the trailing ✕ deletes, and no `.assets` directory or `![` snippet appears.

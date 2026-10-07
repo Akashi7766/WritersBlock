@@ -21,6 +21,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -55,7 +56,9 @@ import com.example.writersblock.data.serializeNote
 import com.example.writersblock.theme.WritersBlockTheme
 import com.example.writersblock.ui.OverlayDrawer
 import com.example.writersblock.ui.ScrollHandle
-import com.example.writersblock.ui.SaveRequest
+import com.example.writersblock.ui.SwitchChoice
+import com.example.writersblock.ui.draftImageResolver
+import com.example.writersblock.ui.shareNote
 import com.example.writersblock.ui.appendImage
 import com.example.writersblock.ui.appendText
 import com.example.writersblock.ui.removeBlock
@@ -136,8 +139,10 @@ class OverlayService : Service(),
         /** Opens the drawer, optionally binding it to [filePath] first. No-op if not running. */
         fun openDrawer(context: Context, filePath: String? = null) {
             val service = instance ?: return
-            if (filePath != null) service.bind(filePath)
-            service.post { service.setDrawerOpen(true) }
+            service.post {
+                if (filePath != null) service.requestSwitch(filePath)
+                service.setDrawerOpen(true)
+            }
         }
 
         /** True when the drawer is already bound to [filePath]. */
@@ -208,13 +213,22 @@ class OverlayService : Service(),
     private var drawerWindow: ComposeView? = null
     private var viewsReady = false
 
-    /** The drawer's unsaved work. Mirrored into prefs on every change. */
+    /**
+     * The draft of the page the drawer shows: the loose page, or the bound note being edited. Mirrored
+     * into prefs on every change, which is the drawer's autosave.
+     */
     private val pendingBlocks = mutableStateListOf<NoteBlock>()
 
-    /** The note the drawer is bound to; empty means scratch. */
+    /** The note the drawer shows; empty means the loose page. */
     private val boundPath = mutableStateOf("")
 
-    private var boundBlocks by mutableStateOf<List<NoteBlock>>(emptyList())
+    /** The page as last loaded or saved. The draft differing from it is what "unsaved" means. */
+    private val baseline = mutableStateOf("")
+
+    private val isDirty = derivedStateOf { serializeNote(pendingBlocks) != baseline.value }
+
+    /** A page the user asked to switch to while the current one had unsaved changes. */
+    private val switchTarget = mutableStateOf<String?>(null)
 
     private val drawerOpen = mutableStateOf(false)
     private val focusRequestId = mutableIntStateOf(0)
@@ -248,11 +262,7 @@ class OverlayService : Service(),
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
 
-        pendingBlocks.addAll(decodePending(prefs.overlayPending))
-        pendingBlocks.seedIfEmpty()
-
-        boundPath.value = prefs.overlayActiveFilePath
-        reloadBoundBlocks()
+        restorePage()
 
         // A capture that was staged but never committed has nowhere to go once its note is gone.
         CaptureStore.pruneStaging(this)
@@ -276,13 +286,13 @@ class OverlayService : Service(),
             ACTION_TOGGLE_DRAWER -> setDrawerOpen(!drawerOpen.value)
             ACTION_OPEN_DRAWER -> {
                 intent.getStringExtra(EXTRA_FILE_PATH)?.let { linkPath ->
-                    if (linkPath.isNotEmpty()) bind(linkPath)
+                    if (linkPath.isNotEmpty()) requestSwitch(linkPath)
                 }
                 setDrawerOpen(true)
             }
             ACTION_BIND -> {
                 intent.getStringExtra(EXTRA_FILE_PATH)?.let { linkPath ->
-                    if (linkPath.isNotEmpty()) bind(linkPath)
+                    if (linkPath.isNotEmpty()) requestSwitch(linkPath)
                 }
                 setDrawerOpen(true)
             }
@@ -418,9 +428,11 @@ class OverlayService : Service(),
                         isOpen = drawerOpen.value,
                         onRequestClose = { setDrawerOpen(false) },
                         focusRequestId = focusRequestId.intValue,
-                        boundNotePath = boundPath.value,
-                        boundBlocks = boundBlocks,
-                        onBind = ::bind,
+                        pagePath = boundPath.value,
+                        isDirty = this@OverlayService.isDirty.value,
+                        onRequestSwitch = ::requestSwitch,
+                        switchTarget = switchTarget.value,
+                        onResolveSwitch = ::resolveSwitch,
                         pendingBlocks = pendingBlocks,
                         onPendingTextChange = { id, text ->
                             pendingBlocks.replaceText(id, text)
@@ -433,7 +445,15 @@ class OverlayService : Service(),
                         onCopy = ::copyPending,
                         onPaste = ::pasteIntoPending,
                         onCapture = ::startCapture,
-                        onSave = ::handleSave,
+                        onSave = { saveBound() },
+                        onSaveAsNew = ::saveAsNewNote,
+                        onShare = {
+                            val page = boundPath.value
+                            val title = if (page.isEmpty()) "Loose page" else File(page).nameWithoutExtension
+                            runCatching {
+                                shareNote(this@OverlayService, title, pendingBlocks.toList(), draftImageResolver(page))
+                            }.onFailure { toast("Could not share") }
+                        },
                     )
                 }
             }
@@ -483,7 +503,7 @@ class OverlayService : Service(),
 
         if (open) {
             // The note may have been edited in the app since the drawer last looked at it.
-            reloadBoundBlocks()
+            refreshFromDisk()
             // Focus is bumped once the slide has settled rather than immediately: making the window
             // focusable and asking it to raise the keyboard are two different round trips to the
             // window manager, and the second one loses if it is sent in the same frame as the first.
@@ -503,12 +523,6 @@ class OverlayService : Service(),
 
     private fun persistPending() {
         prefs.overlayPending = encodePending(pendingBlocks.toList())
-    }
-
-    private fun clearPending() {
-        pendingBlocks.clear()
-        pendingBlocks.seedIfEmpty()
-        persistPending()
     }
 
     private fun copyPending() {
@@ -550,70 +564,123 @@ class OverlayService : Service(),
         capturedSomething = true
     }
 
-    // ── Binding ───────────────────────────────────────────────────────────────────────────────
+    // ── Pages ─────────────────────────────────────────────────────────────────────────────────
 
-    /** Binds the drawer to [path], or to nothing at all when [path] is empty. */
-    private fun bind(path: String) {
-        prefs.overlayActiveFilePath = path
+    /**
+     * Brings back the page the drawer was showing before the process died, draft and all.
+     *
+     * A bound note with no stored baseline is a draft from the older, append-only drawer, whose draft
+     * held only what was to be added to the note. It is folded onto the end of the note, unsaved, so
+     * nothing written in it is lost.
+     */
+    private fun restorePage() {
+        var path = prefs.overlayActiveFilePath
+        if (path.isNotEmpty() && !File(path).isFile) path = "" // the note was deleted meanwhile
+        val draft = decodePending(prefs.overlayPending)
+        val storedBaseline = prefs.overlayBaseline
+
+        pendingBlocks.clear()
+        when {
+            path.isEmpty() -> {
+                pendingBlocks.addAll(draft)
+                baseline.value = ""
+            }
+            storedBaseline == null -> {
+                val content = FileRepository.readFile(path)
+                pendingBlocks.addAll(parseNote(content, File(path).name))
+                draft.forEach { block ->
+                    when (block) {
+                        is NoteBlock.Text -> if (block.text.isNotEmpty()) pendingBlocks.appendText(block.text)
+                        is NoteBlock.Image -> pendingBlocks.appendImage(block.alt, block.ref)
+                    }
+                }
+                baseline.value = content
+            }
+            else -> {
+                pendingBlocks.addAll(draft)
+                baseline.value = storedBaseline
+            }
+        }
+        pendingBlocks.seedIfEmpty()
         boundPath.value = path
-        reloadBoundBlocks()
+        prefs.overlayActiveFilePath = path
+        prefs.overlayBaseline = baseline.value
+        persistPending()
     }
 
-    private fun reloadBoundBlocks() {
-        val path = boundPath.value
-        boundBlocks = if (path.isEmpty()) {
-            emptyList()
+    /** Shows [path] (or the loose page, for ""), discarding whatever draft was there. */
+    private fun loadPage(path: String) {
+        pendingBlocks.clear()
+        if (path.isEmpty()) {
+            baseline.value = ""
         } else {
-            val file = File(path)
-            runCatching { parseNote(FileRepository.readFile(path), file.name) }.getOrDefault(emptyList())
+            val content = FileRepository.readFile(path)
+            pendingBlocks.addAll(parseNote(content, File(path).name))
+            baseline.value = content
         }
+        pendingBlocks.seedIfEmpty()
+        boundPath.value = path
+        prefs.overlayActiveFilePath = path
+        prefs.overlayBaseline = baseline.value
+        persistPending()
     }
 
-    // ── Committing ────────────────────────────────────────────────────────────────────────────
-
-    private fun handleSave(request: SaveRequest) {
-        when (request) {
-            SaveRequest.AppendToBound -> appendToBound()
-            SaveRequest.ReplaceBound -> replaceBound()
-            is SaveRequest.AsNewNote -> saveAsNewNote(request.folderPath, request.name)
-        }
-    }
-
-    private fun appendToBound() {
+    /** The note may have been edited in the app since the drawer last looked; a clean draft follows it. */
+    private fun refreshFromDisk() {
         val path = boundPath.value
-        val noteFile = if (path.isEmpty()) null else File(path)
-        if (noteFile == null) {
-            toast("Bind the drawer to a note first, or save as a new one")
-            return
-        }
-
-        val merged = joinForAppend(
-            FileRepository.readFile(path),
-            serializeNote(materialize(noteFile)),
-        )
-        if (FileRepository.writeFile(path, merged)) {
-            clearPending()
-            reloadBoundBlocks()
-            toast("Appended to ${noteFile.name}")
-        } else {
-            toast("Could not write ${noteFile.name}")
+        if (path.isEmpty() || isDirty.value) return
+        if (!File(path).isFile) {
+            loadPage("")
+        } else if (FileRepository.readFile(path) != baseline.value) {
+            loadPage(path)
         }
     }
 
-    private fun replaceBound() {
-        val path = boundPath.value
-        val noteFile = if (path.isEmpty()) null else File(path)
-        if (noteFile == null) {
-            toast("Bind the drawer to a note first")
-            return
-        }
+    /** Switches pages, or asks what to do with unsaved changes first. */
+    private fun requestSwitch(path: String) {
+        if (path == boundPath.value) return
+        if (isDirty.value) switchTarget.value = path else loadPage(path)
+    }
 
-        if (FileRepository.writeFile(path, serializeNote(materialize(noteFile)))) {
-            clearPending()
-            reloadBoundBlocks()
-            toast("Replaced ${noteFile.name}")
+    private fun resolveSwitch(choice: SwitchChoice) {
+        val target = switchTarget.value ?: return
+        switchTarget.value = null
+        when (choice) {
+            SwitchChoice.Cancel -> Unit
+            SwitchChoice.Discard -> loadPage(target)
+            SwitchChoice.Save -> if (saveBound()) loadPage(target)
+            SwitchChoice.AppendToTarget -> if (appendTo(target)) loadPage(target)
+        }
+    }
+
+    // ── Saving ────────────────────────────────────────────────────────────────────────────────
+
+    /** Writes the draft into the bound note. */
+    private fun saveBound(): Boolean {
+        val path = boundPath.value
+        if (path.isEmpty()) return false
+        val noteFile = File(path)
+        val content = serializeNote(materialize(noteFile))
+        return if (FileRepository.writeFile(path, content)) {
+            loadPage(path) // re-read, so the new captures' references are the note-relative ones
+            toast("Saved ${noteFile.nameWithoutExtension}")
+            true
         } else {
-            toast("Could not write ${noteFile.name}")
+            toast("Could not write ${noteFile.nameWithoutExtension}")
+            false
+        }
+    }
+
+    /** Adds the draft to the end of the note at [path]. */
+    private fun appendTo(path: String): Boolean {
+        val noteFile = File(path)
+        val merged = joinForAppend(FileRepository.readFile(path), serializeNote(materialize(noteFile)))
+        return if (FileRepository.writeFile(path, merged)) {
+            toast("Added to the end of ${noteFile.nameWithoutExtension}")
+            true
+        } else {
+            toast("Could not write ${noteFile.nameWithoutExtension}")
+            false
         }
     }
 
@@ -634,27 +701,26 @@ class OverlayService : Service(),
 
         val content = serializeNote(materialize(created))
         if (FileRepository.writeFile(created.absolutePath, content)) {
-            clearPending()
-            bind(created.absolutePath)
-            toast("Saved as ${created.name}")
+            loadPage(created.absolutePath)
+            toast("Saved as ${created.nameWithoutExtension}")
         } else {
-            toast("Could not write ${created.name}")
+            toast("Could not write ${created.nameWithoutExtension}")
         }
     }
 
     /**
-     * Moves every staged capture into [noteFile]'s assets directory and rewrites the references.
-     *
-     * A capture whose file has gone is dropped rather than written as a reference to nothing.
+     * The draft, ready to be written into [noteFile]: every staged capture is moved into the note's
+     * assets directory and its reference rewritten. References that are already note-relative — the
+     * bound note's own pictures — are kept as they are. A capture whose file has gone is dropped rather
+     * than written as a reference to nothing.
      */
     private fun materialize(noteFile: File): List<NoteBlock> =
-        materializeBlocks(pendingBlocks.toList()) { staged ->
-            val source = File(staged)
-            if (!source.isFile) {
-                null
-            } else {
-                FileRepository.moveIntoAssets(noteFile, source)
-                    ?.let { FileRepository.refFor(noteFile, it) }
+        materializeBlocks(pendingBlocks.toList()) { ref ->
+            val source = File(ref)
+            when {
+                !source.isAbsolute -> ref
+                !source.isFile -> null
+                else -> FileRepository.moveIntoAssets(noteFile, source)?.let { FileRepository.refFor(noteFile, it) }
             }
         }
 

@@ -24,9 +24,11 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.writersblock.data.DraftStore
 import com.example.writersblock.data.FileRepository
 import com.example.writersblock.data.NoteBlock
 import com.example.writersblock.data.parseNote
+import com.example.writersblock.data.resolveAsset
 import com.example.writersblock.data.serializeNote
 import com.example.writersblock.service.OverlayService
 import com.example.writersblock.theme.*
@@ -41,6 +43,7 @@ fun FileEditorScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val draftsDir = remember { File(context.filesDir, "drafts") }
 
     var currentFilePath by remember { mutableStateOf(filePath) }
     var fileName by remember { mutableStateOf(currentFilePath?.let { File(it).nameWithoutExtension } ?: "") }
@@ -50,26 +53,38 @@ fun FileEditorScreen(
 
     /** The note exactly as it was when last loaded or saved, for the dirty check. */
     var originalContent by remember { mutableStateOf("") }
+    var loaded by remember { mutableStateOf(false) }
 
     var showSaveAsDialog by remember { mutableStateOf(false) }
     var showUnsavedDialog by remember { mutableStateOf(false) }
+    var showExportDialog by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
 
-    // Where a new or copied note goes: beside the file being edited when there is one, so "save as"
-    // from a note in a folder does not quietly drop the copy into the notes root.
-    val destinationFolder = currentFilePath?.let { File(it).parentFile?.absolutePath } ?: folderPath
+    // Where a new or copied note goes by default: beside the file being edited when there is one.
+    val destinationFolder = currentFilePath?.let { File(it).parentFile?.absolutePath }
+        ?: folderPath
+        ?: FileRepository.getNotesRoot(context).absolutePath
 
-    // Load file if it exists, and lay out an empty document if it does not.
+    // Load the note, and lay out an empty document for a new one. A draft left by a crash or a kill
+    // wins over the file: it is the newer version, and it comes back marked unsaved.
     LaunchedEffect(currentFilePath) {
-        val loaded = currentFilePath?.let { FileRepository.readFile(it) } ?: ""
-        val noteFileName = currentFilePath?.let { File(it).name } ?: ""
+        val path = currentFilePath
+        val content = path?.let { FileRepository.readFile(it) } ?: ""
+        val noteFileName = path?.let { File(it).name } ?: ""
 
         blocks.clear()
-        blocks.addAll(parseNote(loaded, noteFileName))
+        val draft = DraftStore.load(draftsDir, path)
+        if (draft != null && serializeNote(draft) != content) {
+            blocks.addAll(draft)
+            Toast.makeText(context, "Restored your unsaved words", Toast.LENGTH_SHORT).show()
+        } else {
+            blocks.addAll(parseNote(content, noteFileName))
+        }
         // A new note parses to nothing; it still needs one block for the caret to live in.
         blocks.seedIfEmpty()
 
-        originalContent = loaded
+        originalContent = content
+        loaded = true
     }
 
     // The file form of the document. Derived rather than recomputed inline so it is only recalculated
@@ -78,12 +93,21 @@ fun FileEditorScreen(
 
     val isChanged = serialized != originalContent
 
+    // The autosave: every change goes to the crash-safe draft, never to the note itself. Saving the
+    // note is still the Save button's job; this only means a crash cannot cost the words since then.
+    LaunchedEffect(serialized, currentFilePath, loaded) {
+        if (!loaded) return@LaunchedEffect
+        delay(400)
+        if (isChanged) DraftStore.save(draftsDir, currentFilePath, blocks.toList()) else DraftStore.clear(draftsDir, currentFilePath)
+    }
+
     /** Writes the document back over the file it came from. */
     fun writeToCurrentFile(): Boolean {
         val path = currentFilePath
         if (path == null) return false
         return if (FileRepository.writeFile(path, serialized)) {
             originalContent = serialized
+            DraftStore.clear(draftsDir, path)
             Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show()
             true
         } else {
@@ -92,36 +116,51 @@ fun FileEditorScreen(
         }
     }
 
-    /** Writes the document to a file called [name], and edits that from now on. */
-    fun saveAs(name: String): Boolean {
+    /**
+     * Writes the document to a new note called [name] in [folder], and edits that from now on.
+     *
+     * Pictures are copied into the new note's own assets folder and their references rewritten: a
+     * reference only counts when it points into the note's own folder, so copying the old references
+     * as they were would turn every picture in the copy into a line of raw text.
+     */
+    fun saveAs(name: String, folder: String): Boolean {
         val nameToUse = name.trim()
         if (nameToUse.isEmpty()) {
             Toast.makeText(context, "Give the note a name first", Toast.LENGTH_SHORT).show()
             return false
         }
 
-        val created = FileRepository.createFile(context, destinationFolder, nameToUse, serialized)
+        val created = FileRepository.createFile(context, folder, nameToUse, "")
         if (created == null) {
             Toast.makeText(context, "Could not save \"$nameToUse\"", Toast.LENGTH_SHORT).show()
             return false
         }
+        val oldFile = currentFilePath?.let { File(it) }
+        val copied = blocks.toList().mapNotNull { block ->
+            if (block !is NoteBlock.Image || oldFile == null) return@mapNotNull block
+            val source = resolveAsset(oldFile, block.ref)
+            val assets = FileRepository.ensureAssetsDir(created) ?: return@mapNotNull null
+            val target = File(assets, source.name)
+            runCatching { source.copyTo(target, overwrite = true) }.getOrNull()
+                ?.let { block.copy(ref = FileRepository.refFor(created, it)) }
+        }
+        val content = serializeNote(copied)
+        FileRepository.writeFile(created.absolutePath, content)
+        DraftStore.clear(draftsDir, currentFilePath)
 
+        blocks.clear()
+        blocks.addAll(parseNote(content, created.name))
+        blocks.seedIfEmpty()
+        originalContent = content
         currentFilePath = created.absolutePath
         fileName = created.nameWithoutExtension
-        originalContent = serialized
-        Toast.makeText(context, "Saved as ${created.name}", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "Saved as ${created.nameWithoutExtension}", Toast.LENGTH_SHORT).show()
         return true
     }
 
-    /** The SAVE button: overwrite in place, and name the note first if it has never been named. */
+    /** The Save button: overwrite in place, and ask for a name and folder if it has never been saved. */
     fun save() {
-        if (currentFilePath == null && fileName.isBlank()) {
-            showSaveAsDialog = true
-        } else if (currentFilePath == null) {
-            saveAs(fileName)
-        } else {
-            writeToCurrentFile()
-        }
+        if (currentFilePath == null) showSaveAsDialog = true else writeToCurrentFile()
     }
 
     /** Saves, then points the overlay drawer at this note and opens it. */
@@ -134,25 +173,10 @@ fun FileEditorScreen(
         if (isChanged && !writeToCurrentFile()) return
 
         if (!OverlayService.isRunning) {
-            Toast.makeText(
-                context,
-                "Turn on the overlay service in Settings first",
-                Toast.LENGTH_LONG
-            ).show()
+            Toast.makeText(context, "Wake the drawer in Settings first", Toast.LENGTH_LONG).show()
             return
         }
         OverlayService.openDrawer(context, path)
-        Toast.makeText(context, "Drawer bound to ${File(path).name}", Toast.LENGTH_SHORT).show()
-    }
-
-    // Auto-save logic every 30 seconds for existing files
-    LaunchedEffect(serialized, currentFilePath) {
-        if (currentFilePath != null && isChanged) {
-            delay(30000)
-            FileRepository.writeFile(currentFilePath!!, serialized)
-            originalContent = serialized
-            Toast.makeText(context, "Auto-saved", Toast.LENGTH_SHORT).show()
-        }
     }
 
     // Intercept back button to warn of unsaved changes
@@ -243,6 +267,25 @@ fun FileEditorScreen(
                             }
                         )
                         DropdownMenuItem(
+                            text = { MenuLabel("Share to another app…") },
+                            onClick = {
+                                showMenu = false
+                                shareNote(
+                                    context,
+                                    fileName.ifBlank { "Untitled" },
+                                    blocks.toList(),
+                                    noteImageResolver(currentFilePath?.let { File(it) })
+                                )
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { MenuLabel("Export as PDF or Word…") },
+                            onClick = {
+                                showMenu = false
+                                showExportDialog = true
+                            }
+                        )
+                        DropdownMenuItem(
                             text = { MenuLabel("Bind the drawer to this note") },
                             onClick = {
                                 showMenu = false
@@ -310,15 +353,25 @@ fun FileEditorScreen(
     }
 
     if (showSaveAsDialog) {
-        NameDialog(
-            title = if (currentFilePath == null) "Name this Note" else "Save a Copy",
-            hint = "Note name",
-            confirmLabel = "Save",
-            initial = fileName,
+        SaveNoteDialog(
+            title = if (currentFilePath == null) "Save this Note" else "Save a Copy",
+            initialName = fileName,
+            initialFolder = destinationFolder,
             onDismiss = { showSaveAsDialog = false },
-            onConfirm = { name ->
-                if (saveAs(name)) showSaveAsDialog = false
+            onConfirm = { name, folder ->
+                if (saveAs(name, folder)) showSaveAsDialog = false
             }
+        )
+    }
+
+    if (showExportDialog) {
+        val title = fileName.ifBlank { "Untitled" }
+        val noteFile = currentFilePath?.let { File(it) }
+        ExportDialog(
+            title = title,
+            blocks = blocks.toList(),
+            resolveImage = noteImageResolver(noteFile),
+            onDismiss = { showExportDialog = false },
         )
     }
 
@@ -341,7 +394,7 @@ fun FileEditorScreen(
                         showUnsavedDialog = false
                         showSaveAsDialog = true
                     } else {
-                        val saved = currentFilePath?.let { writeToCurrentFile() } ?: saveAs(fileName)
+                        val saved = currentFilePath?.let { writeToCurrentFile() } ?: saveAs(fileName, destinationFolder)
                         if (saved) {
                             showUnsavedDialog = false
                             onBack()
@@ -354,6 +407,7 @@ fun FileEditorScreen(
                 confirmLabel = "Discard",
                 confirmKind = ButtonKind.Danger,
                 onConfirm = {
+                    DraftStore.clear(draftsDir, currentFilePath)
                     showUnsavedDialog = false
                     onBack()
                 },

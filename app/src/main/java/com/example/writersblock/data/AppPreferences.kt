@@ -7,8 +7,9 @@ import android.content.SharedPreferences
  * Everything the overlay needs to survive a process death.
  *
  * The drawer is a service, so it can be killed at any moment while the user is mid-sentence. Its state
- * therefore lives here rather than in memory: the pending document, which note (if any) it is bound
- * to, and where the user last parked the floating handle.
+ * therefore lives here rather than in memory: the draft of the page it shows (autosaved on every
+ * edit), which note (if any) that page is, the note's content when last saved, and where the user last
+ * parked the floating handle.
  */
 class AppPreferences(context: Context) {
 
@@ -31,7 +32,7 @@ class AppPreferences(context: Context) {
         set(value) = prefs.edit().putString(KEY_OVERLAY_PENDING, value).apply()
 
     /**
-     * The note the drawer is bound to, as an absolute path. Empty means scratch mode.
+     * The note the drawer is showing, as an absolute path. Empty means the loose page.
      *
      * This is the mode flag itself rather than a second setting that has to be kept in step with this
      * one — "is it bound" and "which note" are the same question.
@@ -39,6 +40,15 @@ class AppPreferences(context: Context) {
     var overlayActiveFilePath: String
         get() = prefs.getString(KEY_OVERLAY_ACTIVE_FILE_PATH, "") ?: ""
         set(value) = prefs.edit().putString(KEY_OVERLAY_ACTIVE_FILE_PATH, value).apply()
+
+    /**
+     * The bound note's content as it was when the drawer last loaded or saved it: what the draft is
+     * compared against to tell whether there are unsaved changes. Null when never stored, which is
+     * how a draft left by the older, append-only drawer is recognised.
+     */
+    var overlayBaseline: String?
+        get() = prefs.getString(KEY_OVERLAY_BASELINE, null)
+        set(value) = prefs.edit().putString(KEY_OVERLAY_BASELINE, value).apply()
 
     /** Vertical position of the floating handle, in window coordinates. 0 means centred. */
     var overlayHandleY: Int
@@ -58,5 +68,6 @@ class AppPreferences(context: Context) {
         private const val KEY_OVERLAY_PENDING = "overlay_pending"
         private const val KEY_OVERLAY_ACTIVE_FILE_PATH = "overlay_active_file_path"
         private const val KEY_OVERLAY_HANDLE_Y = "overlay_handle_y"
+        private const val KEY_OVERLAY_BASELINE = "overlay_baseline"
     }
 }

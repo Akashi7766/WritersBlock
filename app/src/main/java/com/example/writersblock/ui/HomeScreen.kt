@@ -1,5 +1,6 @@
 package com.example.writersblock.ui
 
+import android.app.Activity
 import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -84,15 +85,20 @@ fun HomeScreen(
                     onClick = {
                         // The capture needs the service to hold the projection, so without it the tap
                         // goes to the switch rather than doing nothing.
-                        if (!OverlayService.capture(context)) {
+                        if (!OverlayService.isRunning) {
                             Toast.makeText(context, "Wake the drawer first to scan", Toast.LENGTH_LONG).show()
                             onNavigate(Dashboard)
+                        } else {
+                            // Scanning this screen would only capture WritersBlock itself, so step
+                            // aside first: the scan then sees the app that was open before this one.
+                            (context as? Activity)?.moveTaskToBack(true)
+                            OverlayService.capture(context)
                         }
                     },
                 )
                 Text(
                     text = if (serviceRunning) {
-                        "Mark a part of any screen and keep its picture and words."
+                        "Steps aside and scans the app you were just in."
                     } else {
                         "The drawer is asleep. Wake it in Settings to scan."
                     },

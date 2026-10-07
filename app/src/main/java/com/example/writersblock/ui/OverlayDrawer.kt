@@ -1,6 +1,5 @@
 package com.example.writersblock.ui
 
-import android.content.Context
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -31,11 +30,14 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -62,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import com.example.writersblock.data.FileRepository
 import com.example.writersblock.data.NoteBlock
 import com.example.writersblock.data.NoteItem
+import com.example.writersblock.data.resolveAsset
 import com.example.writersblock.theme.Blood
 import com.example.writersblock.theme.Gap
 import com.example.writersblock.theme.Ink
@@ -72,18 +75,6 @@ import com.example.writersblock.theme.WoodLight
 import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.math.roundToInt
-
-/** Where the drawer's contents should go when the user hits Save. */
-sealed interface SaveRequest {
-    /** Add the pending blocks to the end of the note the drawer is bound to. */
-    data object AppendToBound : SaveRequest
-
-    /** Overwrite the bound note with the pending blocks, discarding what it held. */
-    data object ReplaceBound : SaveRequest
-
-    /** Write the pending blocks to a new note. */
-    data class AsNewNote(val folderPath: String?, val name: String) : SaveRequest
-}
 
 /**
  * The overlay drawer: a parchment scroll that unrolls down the right side of the screen.
@@ -101,7 +92,9 @@ sealed interface SaveRequest {
  *
  * @param isOpen set by the service. The scroll unrolls when it becomes true; closing is driven from
  *   here so the roll-up is not cut short by the window flags changing under it.
- * @param onBind binds the drawer to a note path, or unbinds it when given an empty string.
+ * The scroll shows one page at a time: the loose page, or a note opened in full and editable. Every
+ * edit is autosaved by the service into a crash-safe draft; Save writes it into the note. Switching
+ * pages with unsaved changes asks first ([switchTarget], resolved through [onResolveSwitch]).
  */
 @Composable
 fun OverlayDrawer(
@@ -109,9 +102,11 @@ fun OverlayDrawer(
     onRequestClose: () -> Unit,
     focusRequestId: Int,
 
-    boundNotePath: String,
-    boundBlocks: List<NoteBlock>,
-    onBind: (String) -> Unit,
+    pagePath: String,
+    isDirty: Boolean,
+    onRequestSwitch: (String) -> Unit,
+    switchTarget: String?,
+    onResolveSwitch: (SwitchChoice) -> Unit,
 
     pendingBlocks: SnapshotStateList<NoteBlock>,
     onPendingTextChange: (id: String, text: String) -> Unit,
@@ -120,7 +115,9 @@ fun OverlayDrawer(
     onCopy: () -> Unit,
     onPaste: () -> Unit,
     onCapture: () -> Unit,
-    onSave: (SaveRequest) -> Unit,
+    onSave: () -> Unit,
+    onSaveAsNew: (folderPath: String, name: String) -> Unit,
+    onShare: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
@@ -153,7 +150,11 @@ fun OverlayDrawer(
             .onPreviewKeyEvent { event ->
                 if (event.key != Key.Back || !isOpen) return@onPreviewKeyEvent false
                 if (event.type == KeyEventType.KeyUp) {
-                    if (sheet != null) sheet = null else dismiss()
+                    when {
+                        switchTarget != null -> onResolveSwitch(SwitchChoice.Cancel)
+                        sheet != null -> sheet = null
+                        else -> dismiss()
+                    }
                 }
                 true
             }
@@ -226,34 +227,25 @@ fun OverlayDrawer(
                     },
                 ),
         ) {
-            DrawerHeader(onDismiss = ::dismiss)
+            DrawerHeader(onDismiss = ::dismiss, onShare = onShare)
 
             ModeBar(
-                boundNotePath = boundNotePath,
+                pagePath = pagePath,
+                isDirty = isDirty,
                 onPickNote = { sheet = DrawerSheet.PickNote },
-                onUnbind = { onBind("") },
+                onClosePage = { onRequestSwitch("") },
             )
-
-            if (boundNotePath.isNotEmpty()) {
-                BoundNotePreview(
-                    notePath = boundNotePath,
-                    blocks = boundBlocks,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(0.5f),
-                )
-                InkRule()
-            }
 
             PendingEditor(
                 blocks = pendingBlocks,
+                resolveImage = remember(pagePath) { draftImageResolver(pagePath) },
                 onTextChange = onPendingTextChange,
                 onImageRemove = onPendingImageRemove,
                 focusRequestId = focusRequestId,
-                hint = if (boundNotePath.isEmpty()) {
-                    "A loose page: nothing is kept until you Save."
-                } else {
-                    "Save adds this to ${File(boundNotePath).nameWithoutExtension}."
+                hint = when {
+                    pagePath.isEmpty() -> "A loose page. Your words are kept safe as you type; Save makes it a note."
+                    isDirty -> "Unsaved, but safe: Save writes your changes into ${File(pagePath).nameWithoutExtension}."
+                    else -> "Saved. Edit anything; scans land at the end."
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -262,15 +254,21 @@ fun OverlayDrawer(
 
             DrawerFooter(
                 pendingBlocks = pendingBlocks,
+                isDirty = isDirty,
                 bottomInset = maxOf(navBottom - Gap.lg, 0.dp),
                 onCopy = onCopy,
                 onPaste = onPaste,
                 onCapture = onCapture,
-                onSave = { sheet = DrawerSheet.Save },
+                onSave = { if (pagePath.isEmpty()) sheet = DrawerSheet.Save else onSave() },
             )
         }
 
-        sheet?.let { current ->
+        val unsavedTarget = switchTarget
+        val current = when {
+            unsavedTarget != null -> DrawerSheet.Unsaved
+            else -> sheet
+        }
+        current?.let { shown ->
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -278,20 +276,24 @@ fun OverlayDrawer(
                     .fillMaxHeight()
                     .imePadding(),
             ) {
+                // One scaffold per kind of sheet, so one sheet's animation never acts on the next.
+                key(shown) {
                 SheetScaffold(
-                    title = when (current) {
-                        DrawerSheet.Save -> "Save to…"
-                        DrawerSheet.PickNote -> "Bind to a Note"
+                    title = when (shown) {
+                        DrawerSheet.Save -> "Save as a Note"
+                        DrawerSheet.PickNote -> "Open a Note"
+                        DrawerSheet.Unsaved -> "Unsaved Changes"
                     },
                     bottomInset = navBottom,
-                    onDismiss = { sheet = null },
+                    onDismiss = {
+                        if (shown == DrawerSheet.Unsaved) onResolveSwitch(SwitchChoice.Cancel) else sheet = null
+                    },
                 ) { dismissSheet ->
-                    when (current) {
+                    when (shown) {
                         DrawerSheet.Save -> SaveSheet(
-                            boundNotePath = boundNotePath,
                             hasContent = pendingBlocks.any { it is NoteBlock.Image || (it is NoteBlock.Text && it.text.isNotBlank()) },
-                            onSave = { request ->
-                                onSave(request)
+                            onSave = { folder, name ->
+                                onSaveAsNew(folder, name)
                                 dismissSheet()
                             },
                             onClose = dismissSheet,
@@ -299,24 +301,58 @@ fun OverlayDrawer(
 
                         DrawerSheet.PickNote -> NotePickerSheet(
                             onPick = { path ->
-                                onBind(path)
-                                dismissSheet()
+                                // Closed at once rather than animated: the switch may raise the Unsaved
+                                // sheet in its place, and a closing animation finishing afterwards would
+                                // dismiss that one instead.
+                                sheet = null
+                                onRequestSwitch(path)
                             },
                             onClose = dismissSheet,
                         )
+
+                        DrawerSheet.Unsaved -> UnsavedSheet(
+                            pagePath = pagePath,
+                            targetPath = unsavedTarget.orEmpty(),
+                            onChoice = { choice ->
+                                if (choice == SwitchChoice.Save && pagePath.isEmpty()) {
+                                    // A loose page needs a name before it can be saved.
+                                    onResolveSwitch(SwitchChoice.Cancel)
+                                    sheet = DrawerSheet.Save
+                                } else {
+                                    onResolveSwitch(choice)
+                                }
+                            },
+                        )
                     }
+                }
                 }
             }
         }
     }
 }
 
-private enum class DrawerSheet { Save, PickNote }
+private enum class DrawerSheet { Save, PickNote, Unsaved }
 
-// ── Header and mode ───────────────────────────────────────────────────────────────────────────────
+/** What to do with unsaved changes when switching to another page. */
+enum class SwitchChoice { Save, AppendToTarget, Discard, Cancel }
+
+/**
+ * Resolves a draft's picture references: absolute paths are captures still in staging, anything else
+ * is a picture the page's note already holds.
+ */
+fun draftImageResolver(pagePath: String): (String) -> File? = { ref ->
+    val file = File(ref)
+    when {
+        file.isAbsolute -> file
+        pagePath.isEmpty() -> null
+        else -> resolveAsset(File(pagePath), ref)
+    }
+}
+
+// ── Header and page ───────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun DrawerHeader(onDismiss: () -> Unit) {
+private fun DrawerHeader(onDismiss: () -> Unit, onShare: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -329,6 +365,9 @@ private fun DrawerHeader(onDismiss: () -> Unit) {
             color = Ink,
             modifier = Modifier.weight(1f),
         )
+        IconAction(label = "Share to another app", onClick = onShare, size = 40.dp, tint = Ink) { tint ->
+            IconShare(tint = tint, size = 18.dp)
+        }
         IconAction(label = "Roll up the drawer", onClick = onDismiss, size = 40.dp, tint = Ink) { tint ->
             IconClose(tint = tint, size = 16.dp)
         }
@@ -337,11 +376,12 @@ private fun DrawerHeader(onDismiss: () -> Unit) {
 
 @Composable
 private fun ModeBar(
-    boundNotePath: String,
+    pagePath: String,
+    isDirty: Boolean,
     onPickNote: () -> Unit,
-    onUnbind: () -> Unit,
+    onClosePage: () -> Unit,
 ) {
-    val bound = boundNotePath.isNotEmpty()
+    val bound = pagePath.isNotEmpty()
 
     Row(
         modifier = Modifier
@@ -349,26 +389,30 @@ private fun ModeBar(
             .padding(start = Gap.lg, end = Gap.sm, bottom = Gap.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        StatusDot(active = bound)
+        StatusDot(active = !isDirty)
         Spacer(Modifier.width(Gap.sm))
-        Text(
-            text = if (bound) File(boundNotePath).nameWithoutExtension else "Loose page",
-            style = MaterialTheme.typography.labelLarge,
-            color = if (bound) Ink else InkFaded,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = if (bound) File(pagePath).nameWithoutExtension else "Loose page",
+                style = MaterialTheme.typography.labelLarge,
+                color = if (bound) Ink else InkFaded,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (isDirty) {
+                Text("unsaved", style = MaterialTheme.typography.labelSmall, color = Blood)
+            }
+        }
         if (bound) {
-            IconAction(label = "Unbind the drawer", onClick = onUnbind, size = 36.dp, tint = InkFaded) { tint ->
+            IconAction(label = "Close this note", onClick = onClosePage, size = 36.dp, tint = InkFaded) { tint ->
                 IconClose(tint = tint, size = 13.dp)
             }
         }
         RoyalButton(
-            label = if (bound) "Change" else "Bind",
+            label = "Notes",
             kind = ButtonKind.Parchment,
             height = 38.dp,
-            icon = { tint -> IconLink(tint = tint, size = 14.dp) },
+            icon = { tint -> IconNote(tint = tint, size = 14.dp) },
             onClick = onPickNote,
         )
     }
@@ -378,41 +422,9 @@ private fun ModeBar(
 // ── Note content ──────────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun BoundNotePreview(
-    notePath: String,
-    blocks: List<NoteBlock>,
-    modifier: Modifier = Modifier,
-) {
-    val noteFile = remember(notePath) { File(notePath) }
-
-    Column(modifier = modifier) {
-        DrawerLabel(if (blocks.isEmpty()) "THE BOUND NOTE IS EMPTY" else "ALREADY IN THIS NOTE")
-        if (blocks.isEmpty()) {
-            Text(
-                text = "Anything you write below lands in it.",
-                style = MaterialTheme.typography.bodySmall.copy(fontStyle = FontStyle.Italic),
-                color = InkFaded,
-                modifier = Modifier.padding(horizontal = Gap.lg, vertical = Gap.sm),
-            )
-        } else {
-            NoteDocument(
-                blocks = blocks,
-                resolveImage = remember(noteFile) { noteImageResolver(noteFile) },
-                editable = false,
-                onTextChange = { _, _ -> },
-                textColor = InkFaded,
-                contentPadding = PaddingValues(start = Gap.lg, end = Gap.lg, top = Gap.xs, bottom = Gap.md),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-            )
-        }
-    }
-}
-
-@Composable
 private fun PendingEditor(
     blocks: SnapshotStateList<NoteBlock>,
+    resolveImage: (String) -> File?,
     onTextChange: (String, String) -> Unit,
     onImageRemove: (String) -> Unit,
     focusRequestId: Int,
@@ -420,6 +432,8 @@ private fun PendingEditor(
     modifier: Modifier = Modifier,
 ) {
     val focusRequester = remember { FocusRequester() }
+    val listState = rememberLazyListState()
+    var lastSize by remember { mutableIntStateOf(blocks.size) }
 
     LaunchedEffect(focusRequestId) {
         if (focusRequestId > 0) {
@@ -429,13 +443,20 @@ private fun PendingEditor(
         }
     }
 
+    // A scan lands at the end of a note that may be long: follow it there, so the new picture is in view.
+    LaunchedEffect(blocks.size) {
+        if (blocks.size > lastSize && blocks.isNotEmpty()) listState.animateScrollToItem(blocks.lastIndex)
+        lastSize = blocks.size
+    }
+
     Column(modifier = modifier) {
         NoteDocument(
             blocks = blocks,
-            resolveImage = remember { stagedImageResolver() },
+            resolveImage = resolveImage,
             editable = true,
             onTextChange = onTextChange,
             onImageRemove = onImageRemove,
+            listState = listState,
             contentPadding = PaddingValues(start = Gap.lg, end = Gap.lg, top = Gap.md, bottom = Gap.md),
             modifier = Modifier
                 .fillMaxWidth()
@@ -458,6 +479,7 @@ private fun PendingEditor(
 @Composable
 private fun DrawerFooter(
     pendingBlocks: List<NoteBlock>,
+    isDirty: Boolean,
     bottomInset: Dp,
     onCopy: () -> Unit,
     onPaste: () -> Unit,
@@ -490,7 +512,13 @@ private fun DrawerFooter(
         Row(horizontalArrangement = Arrangement.spacedBy(Gap.sm), verticalAlignment = Alignment.CenterVertically) {
             RoyalButton(label = "Copy", kind = ButtonKind.Parchment, height = 40.dp, onClick = onCopy, modifier = Modifier.weight(1f))
             RoyalButton(label = "Paste", kind = ButtonKind.Parchment, height = 40.dp, onClick = onPaste, modifier = Modifier.weight(1f))
-            RoyalButton(label = "Save", kind = ButtonKind.Stone, height = 40.dp, onClick = onSave, modifier = Modifier.weight(1.1f))
+            RoyalButton(
+                label = "Save",
+                kind = if (isDirty) ButtonKind.Primary else ButtonKind.Stone,
+                height = 40.dp,
+                onClick = onSave,
+                modifier = Modifier.weight(1.1f),
+            )
         }
         Text(
             text = buildString {
@@ -566,19 +594,16 @@ private fun SheetScaffold(
     }
 }
 
+/** Saving the loose page as a new note: a name, and the folder it goes in. */
 @Composable
 private fun SaveSheet(
-    boundNotePath: String,
     hasContent: Boolean,
-    onSave: (SaveRequest) -> Unit,
+    onSave: (folderPath: String, name: String) -> Unit,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
-    val boundName = if (boundNotePath.isEmpty()) "" else File(boundNotePath).nameWithoutExtension
-
-    var newNoteName by remember { mutableStateOf("") }
-    var destinationFolder by remember { mutableStateOf(FileRepository.getNotesRoot(context).absolutePath) }
-    var pickingFolder by remember { mutableStateOf(false) }
+    var name by remember { mutableStateOf("") }
+    var folder by remember { mutableStateOf(FileRepository.getNotesRoot(context).absolutePath) }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         if (!hasContent) {
@@ -588,98 +613,74 @@ private fun SaveSheet(
                 color = InkFaded,
                 modifier = Modifier.padding(vertical = Gap.md),
             )
-        } else {
-            if (boundName.isNotEmpty()) {
-                SheetRow(
-                    title = "Add to $boundName",
-                    subtitle = "Writes this at the end of the bound note.",
-                    onClick = { onSave(SaveRequest.AppendToBound) },
-                )
-                SheetRow(
-                    title = "Replace $boundName",
-                    subtitle = "Throws away what the note holds and writes this instead.",
-                    danger = true,
-                    onClick = { onSave(SaveRequest.ReplaceBound) },
-                )
-                InkRule(modifier = Modifier.padding(vertical = Gap.sm))
-            }
-
-            if (pickingFolder) {
-                DrawerLabel("CHOOSE A FOLDER")
-                FolderList(
-                    folderPath = destinationFolder,
-                    onNavigate = { destinationFolder = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 220.dp),
-                )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = Gap.sm),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = relativePath(context, destinationFolder),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Ink,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    RoyalButton(label = "Here", kind = ButtonKind.Primary, height = 38.dp, onClick = { pickingFolder = false })
-                }
-            } else {
-                DrawerLabel("AS A NEW NOTE")
-                InkField(
-                    value = newNoteName,
-                    onValueChange = { newNoteName = it },
-                    hint = "Note name",
-                    onDone = {
-                        if (newNoteName.isNotBlank()) onSave(SaveRequest.AsNewNote(destinationFolder, newNoteName.trim()))
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = Gap.xs),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "in " + relativePath(context, destinationFolder),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = InkFaded,
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { pickingFolder = true }
-                            .padding(vertical = Gap.sm),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = "Change",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = WoodLight,
-                        modifier = Modifier
-                            .clickable { pickingFolder = true }
-                            .padding(Gap.sm),
-                    )
-                }
-                Spacer(Modifier.height(Gap.sm))
-                DialogButtons(
-                    confirmLabel = "Create",
-                    confirmEnabled = newNoteName.isNotBlank(),
-                    onConfirm = { onSave(SaveRequest.AsNewNote(destinationFolder, newNoteName.trim())) },
-                    onDismiss = onClose,
-                )
-            }
+            RoyalButton(label = "Close", kind = ButtonKind.Parchment, onClick = onClose, modifier = Modifier.fillMaxWidth())
+            return@Column
         }
+        InkField(
+            value = name,
+            onValueChange = { name = it },
+            hint = "Note name",
+            onDone = { if (name.isNotBlank()) onSave(folder, name.trim()) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(Gap.md))
+        ScrollLabel("SAVE IN")
+        FolderPicker(folderPath = folder, onFolderChange = { folder = it }, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(Gap.sm))
+        DialogButtons(
+            confirmLabel = "Save",
+            confirmEnabled = name.isNotBlank(),
+            onConfirm = { onSave(folder, name.trim()) },
+            onDismiss = onClose,
+        )
+    }
+}
 
-        // The new-note form has its own Cancel beside Create; every other state needs one here.
-        if (!hasContent || pickingFolder) {
-            Spacer(Modifier.height(Gap.sm))
-            RoyalButton(label = "Cancel", kind = ButtonKind.Parchment, onClick = onClose, modifier = Modifier.fillMaxWidth())
+/** Unsaved changes on the way to another page: save them, append them there, or discard them. */
+@Composable
+private fun UnsavedSheet(
+    pagePath: String,
+    targetPath: String,
+    onChoice: (SwitchChoice) -> Unit,
+) {
+    val pageName = if (pagePath.isEmpty()) "The loose page" else File(pagePath).nameWithoutExtension
+    val targetName = if (targetPath.isEmpty()) "the loose page" else File(targetPath).nameWithoutExtension
+
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Gap.sm)) {
+        Text(
+            text = "$pageName has changes that are not saved. What should happen to them before opening $targetName?",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Ink,
+        )
+        RoyalButton(
+            label = if (pagePath.isEmpty()) "Save as a New Note…" else "Save, then Open",
+            kind = ButtonKind.Primary,
+            onClick = { onChoice(SwitchChoice.Save) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        // Appending only makes sense for words that are not a note yet; a saved note's own text would be
+        // copied into the other one wholesale.
+        if (pagePath.isEmpty() && targetPath.isNotEmpty()) {
+            RoyalButton(
+                label = "Append to the End of $targetName",
+                kind = ButtonKind.Parchment,
+                onClick = { onChoice(SwitchChoice.AppendToTarget) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(Gap.sm)) {
+            RoyalButton(
+                label = "Cancel",
+                kind = ButtonKind.Parchment,
+                onClick = { onChoice(SwitchChoice.Cancel) },
+                modifier = Modifier.weight(1f),
+            )
+            RoyalButton(
+                label = "Discard",
+                kind = ButtonKind.Danger,
+                onClick = { onChoice(SwitchChoice.Discard) },
+                modifier = Modifier.weight(1f),
+            )
         }
     }
 }
@@ -704,7 +705,7 @@ private fun NotePickerSheet(
         if (folderPath != root.absolutePath) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = relativePath(context, folderPath),
+                    text = libraryPath(context, folderPath),
                     style = MaterialTheme.typography.labelMedium,
                     color = InkFaded,
                     modifier = Modifier.weight(1f),
@@ -756,44 +757,6 @@ private fun NotePickerSheet(
             onConfirm = { onPick("") },
             onDismiss = onClose,
         )
-    }
-}
-
-/** Folder-only navigation, used by the save sheet's destination picker. */
-@Composable
-private fun FolderList(
-    folderPath: String,
-    onNavigate: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val context = LocalContext.current
-    val root = remember { FileRepository.getNotesRoot(context) }
-
-    val folders = remember(folderPath) {
-        FileRepository.listItems(context, folderPath).filter { it.isDirectory }
-    }
-
-    LazyColumn(modifier = modifier) {
-        if (folderPath != root.absolutePath) {
-            item {
-                FolderRow(name = "‹ Up a level") {
-                    onNavigate(File(folderPath).parentFile?.absolutePath ?: root.absolutePath)
-                }
-            }
-        }
-        items(folders, key = { it.path }) { folder ->
-            FolderRow(name = folder.name) { onNavigate(folder.path) }
-        }
-        if (folders.isEmpty() && folderPath == root.absolutePath) {
-            item {
-                Text(
-                    text = "No folders yet: the note will go in the library itself.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = InkFaded,
-                    modifier = Modifier.padding(vertical = Gap.sm),
-                )
-            }
-        }
     }
 }
 
@@ -873,7 +836,7 @@ private fun PickRow(item: NoteItem, onClick: () -> Unit) {
         Spacer(Modifier.width(Gap.md))
         Column {
             Text(
-                text = item.name,
+                text = item.name.removeSuffix(".md"),
                 style = MaterialTheme.typography.labelLarge,
                 color = Ink,
                 maxLines = 1,
@@ -890,11 +853,4 @@ private fun PickRow(item: NoteItem, onClick: () -> Unit) {
             }
         }
     }
-}
-
-/** `/Ideas` rather than an absolute path. */
-private fun relativePath(context: Context, path: String): String {
-    val root = FileRepository.getNotesRoot(context)
-    val relative = runCatching { File(path).relativeTo(root).path }.getOrNull().orEmpty()
-    return if (relative.isEmpty() || relative == ".") "the library" else "/$relative"
 }

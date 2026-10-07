@@ -1,6 +1,7 @@
 package com.example.writersblock
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
@@ -16,9 +17,18 @@ fun MainNavigation(
     hasOverlayPermission: Boolean,
     onRequestOverlayPermission: () -> Unit,
     hasNotificationPermission: Boolean,
-    onRequestNotificationPermission: () -> Unit
+    onRequestNotificationPermission: () -> Unit,
+    sharedNotePath: String?,
+    onSharedNoteOpened: () -> Unit,
 ) {
     val backStack = rememberNavBackStack(Home)
+
+    LaunchedEffect(sharedNotePath) {
+        if (sharedNotePath != null) {
+            backStack.add(FileEditor(sharedNotePath, null))
+            onSharedNoteOpened()
+        }
+    }
 
     NavDisplay(
         backStack = backStack,

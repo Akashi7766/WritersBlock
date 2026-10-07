@@ -247,3 +247,17 @@ fun IconQuill(
     line(u, 0.80f, 0.20f, 0.40f, 0.60f, tint, W * 0.7f)
     line(u, 0.34f, 0.66f, 0.16f, 0.86f, tint, W)
 }
+
+/** Three linked dots: send to another app. */
+@Composable
+fun IconShare(
+    modifier: Modifier = Modifier,
+    tint: Color = Lavender,
+    size: Dp = DefaultIconSize,
+) = Glyph(tint, size, modifier) { u ->
+    line(u, 0.30f, 0.50f, 0.70f, 0.26f, tint, W)
+    line(u, 0.30f, 0.50f, 0.70f, 0.74f, tint, W)
+    listOf(Offset(0.28f, 0.50f), Offset(0.72f, 0.24f), Offset(0.72f, 0.76f)).forEach { c ->
+        drawCircle(tint, radius = 0.11f * u, center = Offset(c.x * u, c.y * u))
+    }
+}

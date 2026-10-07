@@ -23,10 +23,28 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- "Share → WritersBlock" from any app: text, a picture, or several pictures become a note. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
         </activity>
 
+        <!--
+          Its own task affinity, so starting it from the overlay opens a new task on top of the app
+          the user is in. Sharing the app's task brought MainActivity to the front with it, and the
+          scan captured WritersBlock instead of the app the user meant to scan.
+        -->
         <activity
             android:name=".service.CaptureActivity"
+            android:taskAffinity="com.example.writersblock.capture"
             android:theme="@style/Theme.WritersBlock.Transparent"
             android:exported="false"
             android:excludeFromRecents="true"
@@ -43,6 +61,16 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Overlay control and note-taking workspace service for WritersBlock application" />
         </service>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 
 </manifest>

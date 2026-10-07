@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the FileProvider may hand to other apps when sharing: notes' pictures, exports, and captures
+     the drawer has not saved yet. Nothing else under the app's storage is reachable. -->
+<paths>
+    <files-path name="notes" path="notes/" />
+    <cache-path name="exports" path="exports/" />
+    <cache-path name="captures" path="capture_staging/" />
+</paths>

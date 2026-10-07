@@ -93,33 +93,56 @@ object FileRepository {
         }
     }
 
-    fun createFolder(context: Context, parentPath: String?, folderName: String): File? {
-        val parent = if (parentPath.isNullOrEmpty()) getNotesRoot(context) else File(parentPath)
-        val newFolder = File(parent, folderName)
-        return if (newFolder.exists() || newFolder.mkdirs()) {
-            newFolder
-        } else {
-            null
-        }
+    fun createFolder(context: Context, parentPath: String?, folderName: String): File? =
+        createFolderIn(if (parentPath.isNullOrEmpty()) getNotesRoot(context) else File(parentPath), folderName)
+
+    /** Creates a new folder in [parent]; a taken name gets a number rather than reusing the folder. */
+    fun createFolderIn(parent: File, folderName: String): File? {
+        val folder = uniqueChild(parent, folderName.trim())
+        return if (folder.mkdirs()) folder else null
     }
 
-    fun createFile(context: Context, parentPath: String?, fileName: String, content: String = ""): File? {
-        val parent = if (parentPath.isNullOrEmpty()) getNotesRoot(context) else File(parentPath)
-        val cleanName = if (NOTE_EXTENSIONS.any { fileName.endsWith(".$it") }) {
-            fileName
+    fun createFile(context: Context, parentPath: String?, fileName: String, content: String = ""): File? =
+        createFileIn(if (parentPath.isNullOrEmpty()) getNotesRoot(context) else File(parentPath), fileName, content)
+
+    /**
+     * Creates a new note in [parent] holding [content].
+     *
+     * Never touches an existing file: a taken name becomes "Name (2).md". It used to open the existing
+     * file and write over it, so saving a second note under the same name destroyed the first.
+     */
+    fun createFileIn(parent: File, fileName: String, content: String = ""): File? {
+        val trimmed = fileName.trim()
+        val withExtension = if (NOTE_EXTENSIONS.any { trimmed.endsWith(".$it") }) {
+            trimmed
         } else {
-            "$fileName.$DEFAULT_NOTE_EXTENSION"
+            "$trimmed.$DEFAULT_NOTE_EXTENSION"
         }
-        val newFile = File(parent, cleanName)
         return try {
-            if (newFile.createNewFile() || newFile.exists()) {
-                newFile.writeText(content)
-                newFile
+            parent.mkdirs()
+            val file = uniqueChild(parent, withExtension)
+            if (file.createNewFile()) {
+                file.writeText(content)
+                file
             } else {
                 null
             }
         } catch (e: Exception) {
             null
+        }
+    }
+
+    /** [name] inside [parent], or "name (2)", "name (3)"… when it is taken. The extension is kept. */
+    fun uniqueChild(parent: File, name: String): File {
+        val first = File(parent, name)
+        if (!first.exists()) return first
+        val dot = name.lastIndexOf('.')
+        val (stem, ext) = if (dot > 0) name.substring(0, dot) to name.substring(dot) else name to ""
+        var n = 2
+        while (true) {
+            val candidate = File(parent, "$stem ($n)$ext")
+            if (!candidate.exists()) return candidate
+            n++
         }
     }
 
