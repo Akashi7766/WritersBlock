@@ -31,9 +31,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.contextmenu.provider.LocalTextContextMenuToolbarProvider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -56,6 +58,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -142,6 +145,13 @@ fun OverlayDrawer(
         }
     }
 
+    // The drawer has no activity window to lend Android's own copy/paste bar, so it draws its own.
+    val textMenu = remember { DrawerTextMenu() }
+
+    CompositionLocalProvider(
+        LocalTextContextMenuToolbarProvider provides textMenu,
+        LocalTextToolbar provides textMenu,
+    ) {
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
@@ -328,6 +338,9 @@ fun OverlayDrawer(
                 }
             }
         }
+
+        DrawerTextMenuHost(textMenu)
+    }
     }
 }
 

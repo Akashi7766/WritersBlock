@@ -114,6 +114,10 @@ Dark screens use stone + lavender text; anything written on (editor, drawer, dia
 - **Read the drawer's `unroll` / `dragX` animations only in the layout and draw phases**
   (`Modifier.offset { }`, `drawBehind`, `drawWithContent`; `ScrollPanel` takes `unroll` as a lambda for
   this reason). Reading them during composition recomposes the editor on every animation frame.
+- **The overlay has no copy/paste bar of its own.** Android's floating text toolbar needs an activity
+  window, so in the drawer it is silently refused. `DrawerTextMenu` draws the menu in-window and is
+  provided as both `LocalTextContextMenuToolbarProvider` and `LocalTextToolbar` (text fields use either,
+  depending on Compose version); keep both, and keep `DrawerTextMenuHost` as the drawer's last child.
 - **The overlay has no back dispatcher.** Back is caught with `onPreviewKeyEvent` on the drawer's
   focusable root; keep that root focusable or Back stops closing the drawer.
 - **Overlay commits are explicit and whole-document:** append, replace, or new note. Nothing is
